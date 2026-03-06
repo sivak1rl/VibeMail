@@ -1,0 +1,158 @@
+use crate::db::{models::*, Database};
+use crate::mail::{imap as mail_imap, sync::SyncManager};
+use crate::search::SearchIndex;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, State};
+use tokio::sync::Mutex;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncResult {
+    pub account_id: String,
+    pub new_messages: usize,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListThreadsRequest {
+    pub account_id: String,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub focus_only: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn sync_account(
+    account_id: String,
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<Database>>>,
+    search: State<'_, Arc<Mutex<SearchIndex>>>,
+    sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
+) -> Result<SyncResult, String> {
+    {
+        let mut mgr = sync_mgr.lock().await;
+        if mgr.is_syncing(&account_id) {
+            return Ok(SyncResult {
+                account_id,
+                new_messages: 0,
+                error: Some("Sync already in progress".to_string()),
+            });
+        }
+        mgr.start_sync(&account_id);
+    }
+
+    let result = do_sync(&account_id, db.inner().clone(), search.inner().clone(), app).await;
+
+    let (new_count, err) = match &result {
+        Ok(n) => (*n, None),
+        Err(e) => (0, Some(e.to_string())),
+    };
+
+    {
+        let mut mgr = sync_mgr.lock().await;
+        mgr.finish_sync(&account_id, err.clone());
+    }
+
+    Ok(SyncResult {
+        account_id,
+        new_messages: new_count,
+        error: err,
+    })
+}
+
+async fn do_sync(
+    account_id: &str,
+    db: Arc<Mutex<Database>>,
+    search: Arc<Mutex<SearchIndex>>,
+    app: AppHandle,
+) -> anyhow::Result<usize> {
+    let account = {
+        let db = db.lock().await;
+        db.list_accounts()?
+            .into_iter()
+            .find(|a| a.id == account_id)
+            .ok_or_else(|| anyhow::anyhow!("Account not found"))?
+    };
+
+    let mut session = mail_imap::connect_imap(&account).await?;
+
+    let mut mailbox = {
+        let db = db.lock().await;
+        db.get_mailbox_by_name(account_id, "INBOX")?
+            .unwrap_or_else(|| Mailbox {
+                id: format!("{}:INBOX", account_id),
+                account_id: account_id.to_string(),
+                name: "INBOX".to_string(),
+                delimiter: None,
+                flags: Vec::new(),
+                uid_validity: None,
+                uid_next: None,
+            })
+    };
+
+    let _ = app.emit("sync-progress", "Connecting to IMAP…");
+
+    let messages =
+        mail_imap::sync_mailbox(&mut session, &account, &mut mailbox, db.clone(), {
+            let app = app.clone();
+            move |status: &str| { let _ = app.emit("sync-progress", status); }
+        }).await?;
+    let count = messages.len();
+
+    let _ = app.emit("sync-progress", format!("Indexing {} messages…", count));
+
+    {
+        let search = search.lock().await;
+        for msg in &messages {
+            if let Some(thread_id) = &msg.thread_id {
+                let subject = msg.subject.as_deref().unwrap_or_default();
+                let body = msg.body_text.as_deref().unwrap_or_default();
+                let sender = msg.from.first().map(|a| a.email.as_str()).unwrap_or_default();
+                let _ = search.add_document(thread_id, subject, body, sender);
+            }
+        }
+    }
+
+    let _ = session.logout().await;
+    Ok(count)
+}
+
+#[tauri::command]
+pub async fn list_threads(
+    request: ListThreadsRequest,
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<Vec<Thread>, String> {
+    let limit = request.limit.unwrap_or(50);
+    let offset = request.offset.unwrap_or(0);
+    let db = db.lock().await;
+    let mut threads = db
+        .list_threads(&request.account_id, limit, offset)
+        .map_err(|e| e.to_string())?;
+
+    if request.focus_only.unwrap_or(false) {
+        threads.retain(|t| t.triage_score.unwrap_or(0.5) >= 0.6);
+    }
+    Ok(threads)
+}
+
+#[tauri::command]
+pub async fn get_thread(
+    thread_id: String,
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<Vec<Message>, String> {
+    let db = db.lock().await;
+    db.get_thread_messages(&thread_id)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn mark_read(message_id: String) -> Result<(), String> {
+    tracing::info!("mark_read: {}", message_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn move_message(message_id: String, target_mailbox: String) -> Result<(), String> {
+    tracing::info!("move_message: {} -> {}", message_id, target_mailbox);
+    Ok(())
+}
