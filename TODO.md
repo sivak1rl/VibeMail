@@ -20,6 +20,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Keyboard shortcuts (j/k navigation, r reply, a archive, e mark read)
 - [ ] Swipe actions on thread list (archive, delete, snooze)
 - [x] Unread count badge in sidebar per mailbox
+- [x] Bulk thread selection (checkboxes + shift-select range)
 - [ ] "Pull to refresh" gesture on thread list
 - [ ] Empty state illustrations (no mail, no search results)
 - [ ] Loading skeleton improvements during sync
@@ -49,8 +50,8 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 ## Medium Term — AI Features
 
 ### Summarization
-- [ ] One-click thread summary (already scaffolded, needs UI wiring)
-- [ ] Batch summarize — summarize all unread threads at once
+- [x] One-click thread summary (already scaffolded, needs UI wiring)
+- [x] Batch summarize — summarize all unread threads at once
 - [ ] Summary caching — store in DB, invalidate when new messages arrive
 - [ ] Configurable summary length (brief / detailed)
 

@@ -121,6 +121,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-bottom: 8px;
 }
 
 .focusBtn {
@@ -149,6 +150,27 @@
 .syncBtn:hover { color: var(--color-text); }
 .syncBtn:disabled { animation: spin 1s linear infinite; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.batchRow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.batchBtn {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.batchBtn:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.batchBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 
 .syncStatus {
   margin-top: 6px;

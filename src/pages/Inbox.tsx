@@ -35,14 +35,17 @@ export default function Inbox({ onSettings }: Props) {
     fetchThreads,
     selectThread,
     syncAccount,
+    setThreadsRead,
     setFocusMode,
     loadMoreThreads,
     hasMore,
   } = useThreadStore();
   const { results: searchResults, query: searchQuery, clear: clearSearch } = useSearchStore();
-  const { loadConfig } = useAiStore();
+  const { loadConfig, summarizeThreads, batchSummarizing } = useAiStore();
 
   const [showSearch, setShowSearch] = useState(false);
+  const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
+  const [lastSelectedThreadId, setLastSelectedThreadId] = useState<string | null>(null);
 
   useEffect(() => {
     loadConfig();
@@ -51,6 +54,8 @@ export default function Inbox({ onSettings }: Props) {
   useEffect(() => {
     if (activeAccountId) {
       setShowSearch(false);
+      setSelectedThreadIds([]);
+      setLastSelectedThreadId(null);
       clearSearch();
       void (async () => {
         await fetchMailboxes(activeAccountId);
@@ -63,6 +68,8 @@ export default function Inbox({ onSettings }: Props) {
 
   useEffect(() => {
     if (activeAccountId && selectedMailboxId) {
+      setSelectedThreadIds([]);
+      setLastSelectedThreadId(null);
       void fetchThreads(activeAccountId, selectedMailboxId, focusMode);
     }
   }, [activeAccountId, selectedMailboxId, focusMode, fetchThreads]);
@@ -81,11 +88,67 @@ export default function Inbox({ onSettings }: Props) {
   const handleMailboxSelect = useCallback((mailboxId: string) => {
     selectMailbox(mailboxId);
     setShowSearch(false);
+    setSelectedThreadIds([]);
+    setLastSelectedThreadId(null);
     clearSearch();
   }, [clearSearch, selectMailbox]);
 
   const displayedThreads = showSearch && searchQuery ? searchResults : threads;
   const selectedThread = displayedThreads.find((t) => t.id === selectedThreadId) ?? null;
+  const selectedSet = new Set(selectedThreadIds);
+  const selectedThreads = displayedThreads.filter((thread) => selectedSet.has(thread.id));
+  const selectedUnreadThreads = selectedThreads.filter((thread) => thread.unread_count > 0);
+  const allUnreadDisplayedIds = displayedThreads
+    .filter((thread) => thread.unread_count > 0)
+    .map((thread) => thread.id);
+  const shouldMarkRead = selectedThreads.some((thread) => thread.unread_count > 0);
+
+  const handleToggleSelect = useCallback((threadId: string, selected: boolean, withShift: boolean) => {
+    const orderedIds = displayedThreads.map((thread) => thread.id);
+    setSelectedThreadIds((current) => {
+      if (withShift && lastSelectedThreadId) {
+        const from = orderedIds.indexOf(lastSelectedThreadId);
+        const to = orderedIds.indexOf(threadId);
+        if (from >= 0 && to >= 0) {
+          const [start, end] = from < to ? [from, to] : [to, from];
+          const rangeIds = orderedIds.slice(start, end + 1);
+          const next = new Set(current);
+          for (const id of rangeIds) {
+            if (selected) {
+              next.add(id);
+            } else {
+              next.delete(id);
+            }
+          }
+          return Array.from(next);
+        }
+      }
+
+      const next = new Set(current);
+      if (selected) {
+        next.add(threadId);
+      } else {
+        next.delete(threadId);
+      }
+      return Array.from(next);
+    });
+    setLastSelectedThreadId(threadId);
+  }, [displayedThreads, lastSelectedThreadId]);
+
+  const handleSummarizeSelected = useCallback(async () => {
+    if (selectedThreadIds.length === 0) return;
+    await summarizeThreads(selectedThreadIds);
+  }, [selectedThreadIds, summarizeThreads]);
+
+  const handleSummarizeUnread = useCallback(async () => {
+    if (allUnreadDisplayedIds.length === 0) return;
+    await summarizeThreads(allUnreadDisplayedIds);
+  }, [allUnreadDisplayedIds, summarizeThreads]);
+
+  const handleToggleRead = useCallback(async () => {
+    if (selectedThreadIds.length === 0) return;
+    await setThreadsRead(selectedThreadIds, shouldMarkRead);
+  }, [selectedThreadIds, setThreadsRead, shouldMarkRead]);
 
   return (
     <div className={styles.layout}>
@@ -168,6 +231,36 @@ export default function Inbox({ onSettings }: Props) {
               {syncing ? "⟳" : "↻"}
             </button>
           </div>
+          <div className={styles.batchRow}>
+            <button
+              className={styles.batchBtn}
+              onClick={handleSummarizeSelected}
+              disabled={selectedThreadIds.length === 0 || batchSummarizing}
+              title="Summarize selected threads"
+            >
+              {batchSummarizing ? "Summarizing…" : `Summarize Selected (${selectedThreadIds.length})`}
+            </button>
+            <button
+              className={styles.batchBtn}
+              onClick={handleSummarizeUnread}
+              disabled={allUnreadDisplayedIds.length === 0 || batchSummarizing}
+              title="Summarize all unread threads"
+            >
+              Summarize Unread ({allUnreadDisplayedIds.length})
+            </button>
+            <button
+              className={styles.batchBtn}
+              onClick={handleToggleRead}
+              disabled={selectedThreadIds.length === 0}
+              title="Toggle read state for selected threads"
+            >
+              {selectedThreadIds.length === 0
+                ? "Mark Read/Unread"
+                : shouldMarkRead
+                ? `Mark Read (${selectedUnreadThreads.length})`
+                : "Mark Unread"}
+            </button>
+          </div>
           {syncing && syncProgress && (
             <div className={styles.syncStatus}>{syncProgress}</div>
           )}
@@ -177,7 +270,9 @@ export default function Inbox({ onSettings }: Props) {
         <InboxList
           threads={displayedThreads}
           selectedId={selectedThreadId}
+          selectedThreadIds={selectedThreadIds}
           onSelect={selectThread}
+          onToggleSelect={handleToggleSelect}
           loading={loading}
           onLoadMore={handleLoadMore}
           hasMore={hasMore}

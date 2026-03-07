@@ -64,6 +64,7 @@ interface ThreadStore {
   loadMoreThreads: (accountId: string, mailboxId?: string | null) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
   syncAccount: (accountId: string, mailboxId?: string | null) => Promise<SyncResult>;
+  setThreadsRead: (threadIds: string[], read: boolean) => Promise<void>;
   setFocusMode: (v: boolean) => void;
 }
 
@@ -218,6 +219,46 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
       if (pollTimer) clearInterval(pollTimer);
       if (unlisten) unlisten();
     }
+  },
+
+  setThreadsRead: async (threadIds, read) => {
+    const ids = [...new Set(threadIds)].filter(Boolean);
+    if (ids.length === 0) return;
+
+    await invoke<number>("set_threads_read", {
+      request: {
+        thread_ids: ids,
+        read,
+      },
+    });
+
+    set((state) => {
+      const idSet = new Set(ids);
+      const threads = state.threads.map((thread) =>
+        idSet.has(thread.id)
+          ? {
+              ...thread,
+              unread_count: read ? 0 : Math.max(thread.message_count, 1),
+            }
+          : thread,
+      );
+
+      const selected = state.selectedThreadId;
+      const selectedIsTarget = selected ? idSet.has(selected) : false;
+      const threadMessages = selectedIsTarget
+        ? state.threadMessages.map((message) => {
+            const flags = new Set(message.flags);
+            if (read) {
+              flags.add("\\Seen");
+            } else {
+              flags.delete("\\Seen");
+            }
+            return { ...message, flags: Array.from(flags) };
+          })
+        : state.threadMessages;
+
+      return { threads, threadMessages };
+    });
   },
 
   setFocusMode: (v) => set({ focusMode: v }),

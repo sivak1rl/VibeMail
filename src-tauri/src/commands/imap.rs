@@ -35,6 +35,12 @@ pub struct ListMailboxesRequest {
     pub refresh: Option<bool>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SetThreadsReadRequest {
+    pub thread_ids: Vec<String>,
+    pub read: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MailboxSummary {
     pub id: String,
@@ -293,6 +299,16 @@ pub async fn get_thread(
 pub async fn mark_read(message_id: String) -> Result<(), String> {
     tracing::info!("mark_read: {}", message_id);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn set_threads_read(
+    request: SetThreadsReadRequest,
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<usize, String> {
+    let db = db.lock().await;
+    db.set_threads_read_state(&request.thread_ids, request.read)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

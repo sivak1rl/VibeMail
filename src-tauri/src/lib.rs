@@ -77,6 +77,7 @@ pub fn run() {
             commands::imap::list_threads,
             commands::imap::get_thread,
             commands::imap::mark_read,
+            commands::imap::set_threads_read,
             commands::imap::move_message,
             commands::smtp::send_message,
             commands::ai::summarize_thread,

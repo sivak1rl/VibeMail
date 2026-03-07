@@ -6,7 +6,9 @@ import styles from "./InboxList.module.css";
 interface Props {
   threads: Thread[];
   selectedId: string | null;
+  selectedThreadIds: string[];
   onSelect: (id: string) => void;
+  onToggleSelect: (id: string, selected: boolean, withShift: boolean) => void;
   loading: boolean;
   onLoadMore?: () => void;
   hasMore?: boolean;
@@ -32,8 +34,18 @@ function formatDate(dateStr: string | null) {
   }
 }
 
-export default function InboxList({ threads, selectedId, onSelect, loading, onLoadMore, hasMore }: Props) {
+export default function InboxList({
+  threads,
+  selectedId,
+  selectedThreadIds,
+  onSelect,
+  onToggleSelect,
+  loading,
+  onLoadMore,
+  hasMore,
+}: Props) {
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const selectedSet = new Set(selectedThreadIds);
 
   const handleScroll = useCallback(() => {
     if (!onLoadMore || !hasMore) return;
@@ -74,6 +86,7 @@ export default function InboxList({ threads, selectedId, onSelect, loading, onLo
       {threads.map((thread) => {
         const isUnread = thread.unread_count > 0;
         const isSelected = thread.id === selectedId;
+        const isChecked = selectedSet.has(thread.id);
         const senderDisplay =
           thread.last_from ?? thread.participants[0]?.email ?? "Unknown";
 
@@ -86,7 +99,19 @@ export default function InboxList({ threads, selectedId, onSelect, loading, onLo
             onClick={() => onSelect(thread.id)}
           >
             <div className={styles.itemTop}>
-              <span className={styles.sender}>{senderDisplay}</span>
+              <div className={styles.itemLead}>
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  className={styles.selectCheckbox}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    event.preventDefault();
+                    onToggleSelect(thread.id, !isChecked, event.shiftKey);
+                  }}
+                />
+                <span className={styles.sender}>{senderDisplay}</span>
+              </div>
               <span className={styles.date}>{formatDate(thread.last_date)}</span>
             </div>
             <div className={styles.itemMid}>

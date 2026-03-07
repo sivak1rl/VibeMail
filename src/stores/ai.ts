@@ -34,10 +34,12 @@ interface AiState {
   draftStreaming: Record<string, boolean>;
   actionsByThread: Record<string, ExtractedAction[]>;
   configLoaded: boolean;
+  batchSummarizing: boolean;
 
   loadConfig: () => Promise<void>;
   saveConfig: (config: AiConfig, apiKey?: string) => Promise<void>;
   summarizeThread: (threadId: string) => Promise<void>;
+  summarizeThreads: (threadIds: string[]) => Promise<void>;
   draftReply: (threadId: string) => Promise<string>;
   extractActions: (threadId: string) => Promise<ExtractedAction[]>;
   triageThread: (threadId: string) => Promise<TriageResult>;
@@ -51,6 +53,7 @@ export const useAiStore = create<AiState>((set, get) => ({
   draftStreaming: {},
   actionsByThread: {},
   configLoaded: false,
+  batchSummarizing: false,
 
   loadConfig: async () => {
     try {
@@ -104,6 +107,19 @@ export const useAiStore = create<AiState>((set, get) => ({
       }));
       unlistenToken();
       unlistenDone();
+    }
+  },
+
+  summarizeThreads: async (threadIds) => {
+    const ids = [...new Set(threadIds)].filter(Boolean);
+    if (ids.length === 0) return;
+    set({ batchSummarizing: true });
+    try {
+      for (const threadId of ids) {
+        await get().summarizeThread(threadId);
+      }
+    } finally {
+      set({ batchSummarizing: false });
     }
   },
 

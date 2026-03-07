@@ -395,6 +395,49 @@ impl Database {
         Ok(())
     }
 
+    pub fn set_thread_read_state(&self, thread_id: &str, read: bool) -> Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, flags FROM messages WHERE thread_id=?1")?;
+        let messages = stmt
+            .query_map([thread_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        for (message_id, flags_raw) in messages {
+            let mut flags: Vec<String> = serde_json::from_str(&flags_raw).unwrap_or_default();
+            let has_seen = flags.iter().any(|flag| flag == "\\Seen");
+
+            if read && !has_seen {
+                flags.push("\\Seen".to_string());
+            } else if !read && has_seen {
+                flags.retain(|flag| flag != "\\Seen");
+            }
+
+            self.conn.execute(
+                "UPDATE messages SET flags=?1 WHERE id=?2",
+                rusqlite::params![serde_json::to_string(&flags)?, message_id],
+            )?;
+        }
+
+        self.conn.execute(
+            "UPDATE threads SET unread_count=(
+                SELECT COUNT(*) FROM messages
+                WHERE thread_id=?1 AND instr(COALESCE(flags, ''), '\\Seen') = 0
+            ) WHERE id=?1",
+            [thread_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_threads_read_state(&self, thread_ids: &[String], read: bool) -> Result<usize> {
+        for thread_id in thread_ids {
+            self.set_thread_read_state(thread_id, read)?;
+        }
+        Ok(thread_ids.len())
+    }
+
     pub fn fts_search(
         &self,
         query: &str,
