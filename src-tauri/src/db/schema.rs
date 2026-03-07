@@ -12,7 +12,10 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     )?;
 
     if has_is_flagged == 0 {
-        conn.execute("ALTER TABLE threads ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0", [])?;
+        conn.execute(
+            "ALTER TABLE threads ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
 
     let has_has_attachments: i64 = conn.query_row(
@@ -22,7 +25,10 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     )?;
 
     if has_has_attachments == 0 {
-        conn.execute("ALTER TABLE threads ADD COLUMN has_attachments INTEGER NOT NULL DEFAULT 0", [])?;
+        conn.execute(
+            "ALTER TABLE threads ADD COLUMN has_attachments INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
     }
 
     let has_last_synced_at: i64 = conn.query_row(
@@ -32,7 +38,10 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     )?;
 
     if has_last_synced_at == 0 {
-        conn.execute("ALTER TABLE mailboxes ADD COLUMN last_synced_at INTEGER", [])?;
+        conn.execute(
+            "ALTER TABLE mailboxes ADD COLUMN last_synced_at INTEGER",
+            [],
+        )?;
     }
 
     Ok(())

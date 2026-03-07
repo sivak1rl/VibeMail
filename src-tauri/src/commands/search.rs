@@ -55,7 +55,7 @@ pub async fn search_semantic(
         .model_for(&TaskKind::Embed)
         .await
         .map_err(|e| e.to_string())?;
-    
+
     tracing::info!("Using embedding model: {}", model);
 
     // 2. Search database for closest threads
@@ -71,11 +71,16 @@ pub async fn search_semantic(
     let thread_ids: Vec<String> = matches.into_iter().map(|(id, _)| id).collect();
 
     // 3. Hydrate threads (Global search)
-    let threads = db.get_threads_by_ids(&thread_ids, None)
+    let threads = db
+        .get_threads_by_ids(&thread_ids, None)
         .map_err(|e| e.to_string())?;
-    
-    tracing::info!("Hydrated {} threads from {} IDs", threads.len(), thread_ids.len());
-    
+
+    tracing::info!(
+        "Hydrated {} threads from {} IDs",
+        threads.len(),
+        thread_ids.len()
+    );
+
     Ok(threads)
 }
 
@@ -104,16 +109,13 @@ pub async fn reindex_all_semantic(
     tokio::spawn(async move {
         use tauri::Emitter;
         println!(">>> BACKEND: Starting reindex for {}", account_id_task);
-        
+
         let result = async {
-            let model = ai_clone
-                .model_for(&TaskKind::Embed)
-                .await
-                .map_err(|e| {
-                    let err = format!("Failed to get embedding model: {}", e);
-                    println!(">>> BACKEND ERROR: {}", err);
-                    err
-                })?;
+            let model = ai_clone.model_for(&TaskKind::Embed).await.map_err(|e| {
+                let err = format!("Failed to get embedding model: {}", e);
+                println!(">>> BACKEND ERROR: {}", err);
+                err
+            })?;
 
             println!(">>> BACKEND: Using model {}", model);
 
@@ -129,7 +131,7 @@ pub async fn reindex_all_semantic(
 
             let total = threads.len();
             println!(">>> BACKEND: Found {} threads", total);
-            
+
             if total == 0 {
                 return Ok(0);
             }
@@ -152,9 +154,15 @@ pub async fn reindex_all_semantic(
                         .map_err(|e| e.to_string())?
                 };
 
-                if messages.is_empty() { continue; }
+                if messages.is_empty() {
+                    continue;
+                }
 
-                let body = messages[0].body_text.as_deref().or(messages[0].body_html.as_deref()).unwrap_or("");
+                let body = messages[0]
+                    .body_text
+                    .as_deref()
+                    .or(messages[0].body_html.as_deref())
+                    .unwrap_or("");
                 let body_truncated: String = body.chars().take(2000).collect();
 
                 let context = format!(
@@ -177,7 +185,7 @@ pub async fn reindex_all_semantic(
                     }
                 }
             }
-            
+
             println!(">>> BACKEND: Finished. Indexed {} threads", success_count);
             Ok::<usize, String>(success_count)
         }

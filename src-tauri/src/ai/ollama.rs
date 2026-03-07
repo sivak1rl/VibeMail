@@ -81,7 +81,9 @@ impl AiProvider for OllamaProvider {
             .send()
             .await?;
 
-        if resp.status() == reqwest::StatusCode::NOT_FOUND || resp.status() == reqwest::StatusCode::BAD_REQUEST {
+        if resp.status() == reqwest::StatusCode::NOT_FOUND
+            || resp.status() == reqwest::StatusCode::BAD_REQUEST
+        {
             // Try legacy /api/embeddings if /api/embed fails or is missing
             // Note: /api/embeddings only supports one at a time in most old versions
             let mut results = Vec::new();
@@ -90,19 +92,22 @@ impl AiProvider for OllamaProvider {
                     "model": model,
                     "prompt": text
                 });
-                let l_resp = self.client
+                let l_resp = self
+                    .client
                     .post(format!("{}/api/embeddings", self.base_url))
                     .json(&legacy_body)
                     .send()
                     .await?;
-                
+
                 if !l_resp.status().is_success() {
                     let err_body = l_resp.text().await.unwrap_or_default();
                     return Err(anyhow!("Ollama embedding failed (legacy): {}", err_body));
                 }
-                
+
                 #[derive(Deserialize)]
-                struct LegacyResponse { embedding: Vec<f32> }
+                struct LegacyResponse {
+                    embedding: Vec<f32>,
+                }
                 let data: LegacyResponse = l_resp.json().await?;
                 results.push(data.embedding);
             }

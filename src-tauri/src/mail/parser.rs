@@ -44,12 +44,12 @@ pub fn parse_message(
 
     let body_text = parsed.body_text(0).map(|s| s.to_string());
     let body_html = parsed.body_html(0).map(|s| s.to_string());
-    
+
     let mut attachments = Vec::new();
     for part in parsed.attachments() {
-        let ct_str = part.content_type().map(|ct| {
-            format!("{}/{}", ct.ctype(), ct.subtype().unwrap_or("octet-stream"))
-        });
+        let ct_str = part
+            .content_type()
+            .map(|ct| format!("{}/{}", ct.ctype(), ct.subtype().unwrap_or("octet-stream")));
         attachments.push(Attachment {
             id: Uuid::new_v4().to_string(),
             message_id: id.to_string(),
@@ -59,7 +59,7 @@ pub fn parse_message(
             data: Some(part.contents().to_vec()),
         });
     }
-    
+
     let has_attachments = !attachments.is_empty();
 
     let msg = Message {

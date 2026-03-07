@@ -200,9 +200,9 @@ impl Database {
     }
 
     pub fn get_mailbox_oldest_date(&self, mailbox_id: &str) -> Result<Option<DateTime<Utc>>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT MIN(date) FROM messages WHERE mailbox_id=?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT MIN(date) FROM messages WHERE mailbox_id=?1")?;
         let date: Option<i64> = stmt.query_row([mailbox_id], |row| row.get(0))?;
         Ok(date.map(|ts| Utc.timestamp_opt(ts, 0).unwrap()))
     }
@@ -677,13 +677,13 @@ impl Database {
         }
 
         sql.push_str("GROUP BY m.thread_id ");
-        
+
         if !fts_query.is_empty() {
             sql.push_str("ORDER BY MAX(rank) LIMIT ? OFFSET ?");
         } else {
             sql.push_str("ORDER BY MAX(m.date) DESC LIMIT ? OFFSET ?");
         }
-        
+
         params.push(limit.into());
         params.push(offset.into());
 
@@ -711,7 +711,7 @@ impl Database {
             .map(|(i, _)| format!("?{}", i + 1))
             .collect::<Vec<_>>()
             .join(",");
-        
+
         let sql = format!(
             "SELECT id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, has_attachments, last_date, last_from, triage_score, labels
              FROM threads WHERE id IN ({}) ORDER BY last_date DESC",
@@ -744,7 +744,7 @@ impl Database {
         let params: Vec<&dyn rusqlite::ToSql> =
             ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         let rows = stmt.query_map(params.as_slice(), map_thread)?;
-        
+
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -841,11 +841,31 @@ impl Database {
 
     pub fn get_counts(&self) -> Result<HashMap<String, i64>> {
         let mut counts = HashMap::new();
-        counts.insert("accounts".to_string(), self.conn.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?);
-        counts.insert("mailboxes".to_string(), self.conn.query_row("SELECT count(*) FROM mailboxes", [], |r| r.get(0))?);
-        counts.insert("threads".to_string(), self.conn.query_row("SELECT count(*) FROM threads", [], |r| r.get(0))?);
-        counts.insert("messages".to_string(), self.conn.query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?);
-        counts.insert("attachments".to_string(), self.conn.query_row("SELECT count(*) FROM attachments", [], |r| r.get(0))?);
+        counts.insert(
+            "accounts".to_string(),
+            self.conn
+                .query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?,
+        );
+        counts.insert(
+            "mailboxes".to_string(),
+            self.conn
+                .query_row("SELECT count(*) FROM mailboxes", [], |r| r.get(0))?,
+        );
+        counts.insert(
+            "threads".to_string(),
+            self.conn
+                .query_row("SELECT count(*) FROM threads", [], |r| r.get(0))?,
+        );
+        counts.insert(
+            "messages".to_string(),
+            self.conn
+                .query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?,
+        );
+        counts.insert(
+            "attachments".to_string(),
+            self.conn
+                .query_row("SELECT count(*) FROM attachments", [], |r| r.get(0))?,
+        );
         Ok(counts)
     }
 
@@ -869,12 +889,14 @@ impl Database {
         // We drop in reverse order of dependencies
         self.conn.execute("DROP TABLE IF EXISTS attachments", [])?;
         self.conn.execute("DROP TABLE IF EXISTS messages_fts", [])?;
-        self.conn.execute("DROP TABLE IF EXISTS thread_embeddings", [])?;
-        self.conn.execute("DROP TABLE IF EXISTS thread_actions", [])?;
+        self.conn
+            .execute("DROP TABLE IF EXISTS thread_embeddings", [])?;
+        self.conn
+            .execute("DROP TABLE IF EXISTS thread_actions", [])?;
         self.conn.execute("DROP TABLE IF EXISTS messages", [])?;
         self.conn.execute("DROP TABLE IF EXISTS threads", [])?;
         self.conn.execute("DROP TABLE IF EXISTS mailboxes", [])?;
-        
+
         // Re-run migrations to recreate them
         crate::db::schema::run_migrations(&mut self.conn)?;
         Ok(())
@@ -919,7 +941,7 @@ impl Database {
         let matches = stmt.query_map(rusqlite::params![account_id, model], |row| {
             let thread_id: String = row.get(0)?;
             let blob: Vec<u8> = row.get(1)?;
-            
+
             // Convert Vec<u8> to Vec<f32> safely
             let embedding: Vec<f32> = blob
                 .chunks_exact(4)
@@ -935,16 +957,20 @@ impl Database {
         })?;
 
         let mut results: Vec<(String, f32)> = matches.collect::<rusqlite::Result<Vec<_>>>()?;
-        
+
         // Filter out zero similarity (likely error or empty embeddings)
         results.retain(|(_, sim)| *sim > 0.0);
-        
+
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        
+
         if !results.is_empty() {
-            tracing::info!("Top semantic match: {} (score: {:.4})", results[0].0, results[0].1);
+            tracing::info!(
+                "Top semantic match: {} (score: {:.4})",
+                results[0].0,
+                results[0].1
+            );
         }
-        
+
         // Apply offset and limit manually for now since we sort in memory
         let start = offset.min(results.len());
         let end = (offset + limit).min(results.len());
@@ -954,7 +980,11 @@ impl Database {
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
-        tracing::warn!("Cosine similarity length mismatch: query {} vs stored {}. Reindexing may be required.", a.len(), b.len());
+        tracing::warn!(
+            "Cosine similarity length mismatch: query {} vs stored {}. Reindexing may be required.",
+            a.len(),
+            b.len()
+        );
         return 0.0;
     }
     let mut dot = 0.0;
