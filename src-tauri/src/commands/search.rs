@@ -28,7 +28,7 @@ pub async fn search_messages(
             limit,
         )
         .map_err(|e| e.to_string())?;
-    db.get_threads_by_ids(&thread_ids)
+    db.get_threads_by_ids(&thread_ids, request.mailbox_id.as_deref())
         .map_err(|e| e.to_string())
 }
 
@@ -42,10 +42,10 @@ pub async fn search_semantic(
     let thread_ids = {
         let search = search.lock().await;
         search
-            .search(&request.query, limit)
+            .search(&request.query, limit.saturating_mul(5))
             .map_err(|e| e.to_string())?
     };
     let db = db.lock().await;
-    db.get_threads_by_ids(&thread_ids)
+    db.get_threads_by_ids(&thread_ids, request.mailbox_id.as_deref())
         .map_err(|e| e.to_string())
 }

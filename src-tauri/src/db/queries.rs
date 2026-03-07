@@ -3,6 +3,13 @@ use anyhow::Result;
 use chrono::{TimeZone, Utc};
 use serde_json;
 
+#[derive(Debug, Clone)]
+pub struct MailboxStats {
+    pub mailbox: Mailbox,
+    pub thread_count: u32,
+    pub unread_count: u32,
+}
+
 impl Database {
     pub fn upsert_account(&self, account: &Account) -> Result<()> {
         self.conn.execute(
@@ -105,6 +112,62 @@ impl Database {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(mailboxes)
+    }
+
+    pub fn list_mailboxes_with_counts(&self, account_id: &str) -> Result<Vec<MailboxStats>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next,
+               COUNT(DISTINCT m.thread_id) AS thread_count,
+               COUNT(DISTINCT CASE
+                 WHEN m.thread_id IS NOT NULL
+                  AND instr(COALESCE(m.flags, ''), '\\Seen') = 0
+                 THEN m.thread_id
+               END) AS unread_count
+               FROM mailboxes mb
+               LEFT JOIN messages m ON m.mailbox_id = mb.id
+               WHERE mb.account_id=?1
+               GROUP BY mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next
+               ORDER BY CASE WHEN UPPER(mb.name) = 'INBOX' THEN 0 ELSE 1 END, mb.name COLLATE NOCASE"#,
+        )?;
+        let mailboxes = stmt
+            .query_map([account_id], |row| {
+                Ok(MailboxStats {
+                    mailbox: Mailbox {
+                        id: row.get(0)?,
+                        account_id: row.get(1)?,
+                        name: row.get(2)?,
+                        delimiter: row.get(3)?,
+                        flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
+                        uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
+                        uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                    },
+                    thread_count: row.get::<_, i64>(7)? as u32,
+                    unread_count: row.get::<_, i64>(8)? as u32,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(mailboxes)
+    }
+
+    pub fn get_mailbox_by_id(&self, account_id: &str, mailbox_id: &str) -> Result<Option<Mailbox>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next
+             FROM mailboxes WHERE account_id=?1 AND id=?2",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![account_id, mailbox_id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(Mailbox {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                name: row.get(2)?,
+                delimiter: row.get(3)?,
+                flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
+                uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
+                uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn upsert_message(&self, msg: &Message) -> Result<()> {
@@ -367,7 +430,11 @@ impl Database {
         Ok(ids)
     }
 
-    pub fn get_threads_by_ids(&self, ids: &[String]) -> Result<Vec<Thread>> {
+    pub fn get_threads_by_ids(
+        &self,
+        ids: &[String],
+        mailbox_id: Option<&str>,
+    ) -> Result<Vec<Thread>> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -377,36 +444,59 @@ impl Database {
             .map(|(i, _)| format!("?{}", i + 1))
             .collect::<Vec<_>>()
             .join(",");
-        let sql = format!(
-            "SELECT id, account_id, subject, participant_ids, message_count, unread_count, last_date, last_from, triage_score, labels FROM threads WHERE id IN ({}) ORDER BY last_date DESC",
-            placeholders
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::ToSql> =
-            ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-        let threads = stmt
-            .query_map(params.as_slice(), |row| {
-                Ok(Thread {
-                    id: row.get(0)?,
-                    account_id: row.get(1)?,
-                    subject: row.get(2)?,
-                    participants: serde_json::from_str(
-                        &row.get::<_, String>(3).unwrap_or_default(),
-                    )
+        let sql = if mailbox_id.is_some() {
+            format!(
+                "SELECT t.id, t.account_id, t.subject, t.participant_ids, t.message_count, t.unread_count, t.last_date, t.last_from, t.triage_score, t.labels
+                 FROM threads t
+                 WHERE t.id IN ({})
+                   AND EXISTS (
+                     SELECT 1 FROM messages m
+                     WHERE m.thread_id = t.id AND m.mailbox_id = ?{}
+                   )
+                 ORDER BY t.last_date DESC",
+                placeholders,
+                ids.len() + 1
+            )
+        } else {
+            format!(
+                "SELECT id, account_id, subject, participant_ids, message_count, unread_count, last_date, last_from, triage_score, labels
+                 FROM threads WHERE id IN ({}) ORDER BY last_date DESC",
+                placeholders
+            )
+        };
+        let map_thread = |row: &rusqlite::Row<'_>| {
+            Ok(Thread {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                subject: row.get(2)?,
+                participants: serde_json::from_str(&row.get::<_, String>(3).unwrap_or_default())
                     .unwrap_or_default(),
-                    message_count: row.get::<_, i64>(4)? as u32,
-                    unread_count: row.get::<_, i64>(5)? as u32,
-                    last_date: row
-                        .get::<_, Option<i64>>(6)?
-                        .map(|ts| chrono::Utc.timestamp_opt(ts, 0).unwrap()),
-                    last_from: row.get(7)?,
-                    triage_score: row.get(8)?,
-                    labels: serde_json::from_str(&row.get::<_, String>(9).unwrap_or_default())
-                        .unwrap_or_default(),
-                    messages: None,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+                message_count: row.get::<_, i64>(4)? as u32,
+                unread_count: row.get::<_, i64>(5)? as u32,
+                last_date: row
+                    .get::<_, Option<i64>>(6)?
+                    .map(|ts| chrono::Utc.timestamp_opt(ts, 0).unwrap()),
+                last_from: row.get(7)?,
+                triage_score: row.get(8)?,
+                labels: serde_json::from_str(&row.get::<_, String>(9).unwrap_or_default())
+                    .unwrap_or_default(),
+                messages: None,
+            })
+        };
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let threads = if let Some(mailbox_id) = mailbox_id {
+            let mut params: Vec<&dyn rusqlite::ToSql> =
+                ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            params.push(&mailbox_id);
+            let rows = stmt.query_map(params.as_slice(), map_thread)?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            let params: Vec<&dyn rusqlite::ToSql> =
+                ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            let rows = stmt.query_map(params.as_slice(), map_thread)?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
         Ok(threads)
     }
 }
@@ -566,5 +656,226 @@ mod tests {
         assert_eq!(inbox_threads[0].id, inbox_thread.id);
         assert_eq!(archive_threads.len(), 1);
         assert_eq!(archive_threads[0].id, archive_thread.id);
+    }
+
+    #[test]
+    fn list_mailboxes_with_counts_returns_unread_badges() {
+        let db = test_db();
+        let account = Account {
+            id: "acc1".to_string(),
+            name: "Test".to_string(),
+            email: "test@example.com".to_string(),
+            provider: "generic".to_string(),
+            imap_host: "imap.example.com".to_string(),
+            imap_port: 993,
+            smtp_host: "smtp.example.com".to_string(),
+            smtp_port: 465,
+        };
+        db.upsert_account(&account).expect("account");
+
+        let inbox = Mailbox {
+            id: "acc1:INBOX".to_string(),
+            account_id: account.id.clone(),
+            name: "INBOX".to_string(),
+            delimiter: Some("/".to_string()),
+            flags: Vec::new(),
+            uid_validity: None,
+            uid_next: None,
+        };
+        db.upsert_mailbox(&inbox).expect("inbox");
+
+        let unread_thread = Thread {
+            id: "thread-unread".to_string(),
+            account_id: account.id.clone(),
+            subject: Some("Unread".to_string()),
+            participants: Vec::new(),
+            message_count: 1,
+            unread_count: 1,
+            last_date: Some(Utc::now()),
+            last_from: Some("unread@example.com".to_string()),
+            triage_score: None,
+            labels: Vec::new(),
+            messages: None,
+        };
+        let read_thread = Thread {
+            id: "thread-read".to_string(),
+            account_id: account.id.clone(),
+            subject: Some("Read".to_string()),
+            participants: Vec::new(),
+            message_count: 1,
+            unread_count: 0,
+            last_date: Some(Utc::now()),
+            last_from: Some("read@example.com".to_string()),
+            triage_score: None,
+            labels: Vec::new(),
+            messages: None,
+        };
+        db.upsert_thread(&unread_thread).expect("unread thread");
+        db.upsert_thread(&read_thread).expect("read thread");
+
+        let unread_message = Message {
+            id: "msg-unread".to_string(),
+            account_id: account.id.clone(),
+            mailbox_id: inbox.id.clone(),
+            uid: 1,
+            message_id: Some("<msg-unread>".to_string()),
+            thread_id: Some(unread_thread.id.clone()),
+            subject: Some("Unread".to_string()),
+            from: Vec::new(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            date: Some(Utc::now()),
+            body_text: None,
+            body_html: None,
+            references_ids: Vec::new(),
+            in_reply_to: None,
+            flags: Vec::new(),
+            has_attachments: false,
+            triage_score: None,
+            ai_summary: None,
+        };
+        let read_message = Message {
+            id: "msg-read".to_string(),
+            account_id: account.id.clone(),
+            mailbox_id: inbox.id.clone(),
+            uid: 2,
+            message_id: Some("<msg-read>".to_string()),
+            thread_id: Some(read_thread.id.clone()),
+            subject: Some("Read".to_string()),
+            from: Vec::new(),
+            to: Vec::new(),
+            cc: Vec::new(),
+            date: Some(Utc::now()),
+            body_text: None,
+            body_html: None,
+            references_ids: Vec::new(),
+            in_reply_to: None,
+            flags: vec!["\\Seen".to_string()],
+            has_attachments: false,
+            triage_score: None,
+            ai_summary: None,
+        };
+        db.upsert_message(&unread_message).expect("unread message");
+        db.upsert_message(&read_message).expect("read message");
+
+        let stats = db
+            .list_mailboxes_with_counts(&account.id)
+            .expect("mailbox stats");
+
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].thread_count, 2);
+        assert_eq!(stats[0].unread_count, 1);
+    }
+
+    #[test]
+    fn get_threads_by_ids_can_filter_by_mailbox() {
+        let db = test_db();
+        let account = Account {
+            id: "acc1".to_string(),
+            name: "Test".to_string(),
+            email: "test@example.com".to_string(),
+            provider: "generic".to_string(),
+            imap_host: "imap.example.com".to_string(),
+            imap_port: 993,
+            smtp_host: "smtp.example.com".to_string(),
+            smtp_port: 465,
+        };
+        db.upsert_account(&account).expect("account");
+
+        let inbox = Mailbox {
+            id: "acc1:INBOX".to_string(),
+            account_id: account.id.clone(),
+            name: "INBOX".to_string(),
+            delimiter: Some("/".to_string()),
+            flags: Vec::new(),
+            uid_validity: None,
+            uid_next: None,
+        };
+        let archive = Mailbox {
+            id: "acc1:Archive".to_string(),
+            account_id: account.id.clone(),
+            name: "Archive".to_string(),
+            delimiter: Some("/".to_string()),
+            flags: Vec::new(),
+            uid_validity: None,
+            uid_next: None,
+        };
+        db.upsert_mailbox(&inbox).expect("inbox");
+        db.upsert_mailbox(&archive).expect("archive");
+
+        let inbox_thread = Thread {
+            id: "thread-inbox".to_string(),
+            account_id: account.id.clone(),
+            subject: Some("Inbox".to_string()),
+            participants: Vec::new(),
+            message_count: 1,
+            unread_count: 0,
+            last_date: Some(Utc::now()),
+            last_from: Some("inbox@example.com".to_string()),
+            triage_score: None,
+            labels: Vec::new(),
+            messages: None,
+        };
+        let archive_thread = Thread {
+            id: "thread-archive".to_string(),
+            account_id: account.id.clone(),
+            subject: Some("Archive".to_string()),
+            participants: Vec::new(),
+            message_count: 1,
+            unread_count: 0,
+            last_date: Some(Utc::now()),
+            last_from: Some("archive@example.com".to_string()),
+            triage_score: None,
+            labels: Vec::new(),
+            messages: None,
+        };
+        db.upsert_thread(&inbox_thread).expect("inbox thread");
+        db.upsert_thread(&archive_thread).expect("archive thread");
+
+        for (id, thread_id, mailbox_id, uid) in [
+            (
+                "msg-inbox",
+                inbox_thread.id.as_str(),
+                inbox.id.as_str(),
+                1_u32,
+            ),
+            (
+                "msg-archive",
+                archive_thread.id.as_str(),
+                archive.id.as_str(),
+                2_u32,
+            ),
+        ] {
+            db.upsert_message(&Message {
+                id: id.to_string(),
+                account_id: account.id.clone(),
+                mailbox_id: mailbox_id.to_string(),
+                uid,
+                message_id: Some(format!("<{}>", id)),
+                thread_id: Some(thread_id.to_string()),
+                subject: Some(id.to_string()),
+                from: Vec::new(),
+                to: Vec::new(),
+                cc: Vec::new(),
+                date: Some(Utc::now()),
+                body_text: None,
+                body_html: None,
+                references_ids: Vec::new(),
+                in_reply_to: None,
+                flags: Vec::new(),
+                has_attachments: false,
+                triage_score: None,
+                ai_summary: None,
+            })
+            .expect("message");
+        }
+
+        let ids = vec![inbox_thread.id.clone(), archive_thread.id.clone()];
+        let filtered = db
+            .get_threads_by_ids(&ids, Some(&archive.id))
+            .expect("filtered ids");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, archive_thread.id);
     }
 }

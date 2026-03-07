@@ -56,6 +56,7 @@ export default function Inbox({ onSettings }: Props) {
         await fetchMailboxes(activeAccountId);
         const initialMailboxId = useMailboxStore.getState().selectedMailboxId;
         await syncAccount(activeAccountId, initialMailboxId);
+        await fetchMailboxes(activeAccountId);
       })();
     }
   }, [activeAccountId, clearSearch, fetchMailboxes, syncAccount]);
@@ -69,7 +70,8 @@ export default function Inbox({ onSettings }: Props) {
   const handleSync = useCallback(async () => {
     if (!activeAccountId) return;
     await syncAccount(activeAccountId, selectedMailboxId);
-  }, [activeAccountId, selectedMailboxId, syncAccount]);
+    await fetchMailboxes(activeAccountId);
+  }, [activeAccountId, fetchMailboxes, selectedMailboxId, syncAccount]);
 
   const handleLoadMore = useCallback(() => {
     if (!activeAccountId) return;
@@ -130,7 +132,10 @@ export default function Inbox({ onSettings }: Props) {
               }`}
               onClick={() => handleMailboxSelect(mailbox.id)}
             >
-              {mailbox.name}
+              <span>{mailbox.name}</span>
+              {mailbox.unread_count > 0 && (
+                <span className={styles.navBadge}>{mailbox.unread_count}</span>
+              )}
             </button>
           ))}
         </div>

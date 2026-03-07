@@ -9,8 +9,15 @@ use tokio::sync::Mutex;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncResult {
     pub account_id: String,
+    pub mailbox_id: Option<String>,
     pub new_messages: usize,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncAccountRequest {
+    pub account_id: String,
+    pub mailbox_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,19 +35,50 @@ pub struct ListMailboxesRequest {
     pub refresh: Option<bool>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MailboxSummary {
+    pub id: String,
+    pub account_id: String,
+    pub name: String,
+    pub delimiter: Option<String>,
+    pub flags: Vec<String>,
+    pub uid_validity: Option<u32>,
+    pub uid_next: Option<u32>,
+    pub thread_count: u32,
+    pub unread_count: u32,
+}
+
+impl From<crate::db::queries::MailboxStats> for MailboxSummary {
+    fn from(value: crate::db::queries::MailboxStats) -> Self {
+        Self {
+            id: value.mailbox.id,
+            account_id: value.mailbox.account_id,
+            name: value.mailbox.name,
+            delimiter: value.mailbox.delimiter,
+            flags: value.mailbox.flags,
+            uid_validity: value.mailbox.uid_validity,
+            uid_next: value.mailbox.uid_next,
+            thread_count: value.thread_count,
+            unread_count: value.unread_count,
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn sync_account(
-    account_id: String,
+    request: SyncAccountRequest,
     app: AppHandle,
     db: State<'_, Arc<Mutex<Database>>>,
     search: State<'_, Arc<Mutex<SearchIndex>>>,
     sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
 ) -> Result<SyncResult, String> {
+    let account_id = request.account_id.clone();
     {
         let mut mgr = sync_mgr.lock().await;
         if mgr.is_syncing(&account_id) {
             return Ok(SyncResult {
                 account_id,
+                mailbox_id: request.mailbox_id.clone(),
                 new_messages: 0,
                 error: Some("Sync already in progress".to_string()),
             });
@@ -48,7 +86,14 @@ pub async fn sync_account(
         mgr.start_sync(&account_id);
     }
 
-    let result = do_sync(&account_id, db.inner().clone(), search.inner().clone(), app).await;
+    let result = do_sync(
+        &account_id,
+        request.mailbox_id.as_deref(),
+        db.inner().clone(),
+        search.inner().clone(),
+        app,
+    )
+    .await;
 
     let (new_count, err) = match &result {
         Ok(n) => (*n, None),
@@ -62,6 +107,7 @@ pub async fn sync_account(
 
     Ok(SyncResult {
         account_id,
+        mailbox_id: request.mailbox_id,
         new_messages: new_count,
         error: err,
     })
@@ -69,6 +115,7 @@ pub async fn sync_account(
 
 async fn do_sync(
     account_id: &str,
+    mailbox_id: Option<&str>,
     db: Arc<Mutex<Database>>,
     search: Arc<Mutex<SearchIndex>>,
     app: AppHandle,
@@ -85,16 +132,21 @@ async fn do_sync(
 
     let mut mailbox = {
         let db = db.lock().await;
-        db.get_mailbox_by_name(account_id, "INBOX")?
-            .unwrap_or_else(|| Mailbox {
-                id: format!("{}:INBOX", account_id),
-                account_id: account_id.to_string(),
-                name: "INBOX".to_string(),
-                delimiter: None,
-                flags: Vec::new(),
-                uid_validity: None,
-                uid_next: None,
-            })
+        if let Some(mailbox_id) = mailbox_id {
+            db.get_mailbox_by_id(account_id, mailbox_id)?
+                .ok_or_else(|| anyhow::anyhow!("Mailbox not found"))?
+        } else {
+            db.get_mailbox_by_name(account_id, "INBOX")?
+                .unwrap_or_else(|| Mailbox {
+                    id: format!("{}:INBOX", account_id),
+                    account_id: account_id.to_string(),
+                    name: "INBOX".to_string(),
+                    delimiter: None,
+                    flags: Vec::new(),
+                    uid_validity: None,
+                    uid_next: None,
+                })
+        }
     };
 
     let _ = app.emit("sync-progress", "Connecting to IMAP…");
@@ -157,7 +209,7 @@ pub async fn list_threads(
 pub async fn list_mailboxes(
     request: ListMailboxesRequest,
     db: State<'_, Arc<Mutex<Database>>>,
-) -> Result<Vec<Mailbox>, String> {
+) -> Result<Vec<MailboxSummary>, String> {
     let account = {
         let db = db.lock().await;
         db.list_accounts()
@@ -183,17 +235,24 @@ pub async fn list_mailboxes(
         }
 
         let _ = session.logout().await;
-        return Ok(mailboxes);
+        let db = db.lock().await;
+        let summaries = db
+            .list_mailboxes_with_counts(&request.account_id)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(MailboxSummary::from)
+            .collect();
+        return Ok(summaries);
     }
 
     let cached = {
         let db = db.lock().await;
-        db.list_mailboxes(&request.account_id)
+        db.list_mailboxes_with_counts(&request.account_id)
             .map_err(|e| e.to_string())?
     };
 
     if !cached.is_empty() {
-        return Ok(cached);
+        return Ok(cached.into_iter().map(MailboxSummary::from).collect());
     }
 
     let mut session = mail_imap::connect_imap(&account)
@@ -211,7 +270,13 @@ pub async fn list_mailboxes(
     }
 
     let _ = session.logout().await;
-    Ok(mailboxes)
+    let db = db.lock().await;
+    Ok(db
+        .list_mailboxes_with_counts(&request.account_id)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(MailboxSummary::from)
+        .collect())
 }
 
 #[tauri::command]

@@ -9,6 +9,8 @@ export interface Mailbox {
   flags: string[];
   uid_validity: number | null;
   uid_next: number | null;
+  thread_count: number;
+  unread_count: number;
 }
 
 interface MailboxStore {

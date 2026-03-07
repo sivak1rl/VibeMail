@@ -45,6 +45,7 @@ export interface Thread {
 
 interface SyncResult {
   account_id: string;
+  mailbox_id: string | null;
   new_messages: number;
   error: string | null;
 }
@@ -147,7 +148,12 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
       unlisten = await listen<string>("sync-progress", (event) => {
         set({ syncProgress: event.payload });
       });
-      const result = await invoke<SyncResult>("sync_account", { accountId });
+      const result = await invoke<SyncResult>("sync_account", {
+        request: {
+          account_id: accountId,
+          mailbox_id: mailboxId,
+        },
+      });
       set({ syncing: false, syncError: result.error, syncProgress: null });
       if (!result.error) {
         await get().fetchThreads(accountId, mailboxId, get().focusMode);
