@@ -106,8 +106,28 @@
   text-align: center;
 }
 
-.navBadgeEmpty {
-  visibility: hidden;
+.sidebarStatus {
+  margin-top: auto;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.statusSpinner {
+  font-size: 14px;
+  color: var(--color-accent);
+  animation: spin 1.5s linear infinite;
+}
+
+.statusText {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .listPane {

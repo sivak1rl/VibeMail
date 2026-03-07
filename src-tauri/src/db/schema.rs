@@ -128,6 +128,15 @@ CREATE TABLE IF NOT EXISTS thread_actions (
     updated_at   INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+CREATE TABLE IF NOT EXISTS thread_embeddings (
+    thread_id    TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+    model        TEXT NOT NULL,
+    embedding    BLOB NOT NULL,             -- Float32 array
+    updated_at   INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_model ON thread_embeddings(model);
+
 -- Full-text search
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     subject,

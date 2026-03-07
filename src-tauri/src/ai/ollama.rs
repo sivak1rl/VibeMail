@@ -48,8 +48,44 @@ struct OllamaResponse {
     prompt_eval_count: Option<u32>,
 }
 
+#[derive(Serialize)]
+struct OllamaEmbedRequest<'a> {
+    model: &'a str,
+    input: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct OllamaEmbedResponse {
+    embeddings: Vec<Vec<f32>>,
+}
+
 #[async_trait::async_trait]
 impl AiProvider for OllamaProvider {
+    async fn embed(&self, model: &str, text: &str) -> Result<Vec<f32>> {
+        let resp = self.embed_batch(model, &[text.to_string()]).await?;
+        resp.into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("No embedding returned"))
+    }
+
+    async fn embed_batch(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        let body = OllamaEmbedRequest {
+            model,
+            input: texts.to_vec(),
+        };
+
+        let resp = self
+            .client
+            .post(format!("{}/api/embed", self.base_url))
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let data: OllamaEmbedResponse = resp.json().await?;
+        Ok(data.embeddings)
+    }
+
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse> {
         let messages: Vec<OllamaMessage> = req
             .messages

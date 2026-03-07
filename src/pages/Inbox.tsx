@@ -65,8 +65,17 @@ export default function Inbox({ onSettings }: Props) {
       void (async () => {
         await fetchMailboxes(activeAccountId);
         const initialMailboxId = useMailboxStore.getState().selectedMailboxId;
-        await syncAccount(activeAccountId, initialMailboxId);
-        await fetchMailboxes(activeAccountId, true);
+
+        // Check background tasks
+        const isSyncing = await invoke<boolean>("get_sync_status", { accountId: activeAccountId });
+        if (isSyncing) void syncAccount(activeAccountId, initialMailboxId);
+        else {
+          await syncAccount(activeAccountId, initialMailboxId);
+          await fetchMailboxes(activeAccountId, true);
+        }
+
+        const isReindexing = await invoke<boolean>("get_reindex_status", { accountId: activeAccountId });
+        if (isReindexing) void useSearchStore.getState().reindexAll(activeAccountId, false);
       })();
     }
   }, [activeAccountId, clearSearch, fetchMailboxes, syncAccount]);
@@ -313,6 +322,13 @@ export default function Inbox({ onSettings }: Props) {
           )}
           {renderMailboxTree(mailboxTree)}
         </div>
+
+        {syncing && syncProgress && (
+          <div className={styles.sidebarStatus}>
+            <span className={styles.statusSpinner}>⟳</span>
+            <span className={styles.statusText}>{syncProgress}</span>
+          </div>
+        )}
       </div>
 
       {/* Thread list pane */}

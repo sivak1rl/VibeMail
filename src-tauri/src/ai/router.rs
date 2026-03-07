@@ -95,4 +95,10 @@ impl AiRouter {
         };
         provider.stream_complete(req).await
     }
+
+    pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let provider = self.provider_for(&TaskKind::Embed).await?;
+        let model = self.model_for(&TaskKind::Embed).await?;
+        provider.embed(&model, text).await
+    }
 }

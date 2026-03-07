@@ -92,12 +92,14 @@ pub async fn sync_account(
     sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
 ) -> Result<SyncResult, String> {
     let account_id = request.account_id.clone();
+    let mailbox_id = request.mailbox_id.clone();
+
     {
         let mut mgr = sync_mgr.lock().await;
         if mgr.is_syncing(&account_id) {
             return Ok(SyncResult {
                 account_id,
-                mailbox_id: request.mailbox_id.clone(),
+                mailbox_id,
                 new_messages: 0,
                 error: Some("Sync already in progress".to_string()),
             });
@@ -105,35 +107,43 @@ pub async fn sync_account(
         mgr.start_sync(&account_id);
     }
 
-    let result = if let Some(mailbox_id) = &request.mailbox_id {
-        do_sync(
-            &account_id,
-            Some(mailbox_id),
-            db.inner().clone(),
-            search.inner().clone(),
-            app,
-        )
-        .await
-    } else {
-        // Sync all folders
-        sync_all_folders(&account_id, db.inner().clone(), search.inner().clone(), app).await
-    };
+    // Clone for background task
+    let db_clone = db.inner().clone();
+    let search_clone = search.inner().clone();
+    let sync_mgr_clone = sync_mgr.inner().clone();
+    let app_clone = app.clone();
+    let account_id_task = account_id.clone();
+    let mailbox_id_task = mailbox_id.clone();
 
-    let (new_count, err) = match &result {
-        Ok(n) => (*n, None),
-        Err(e) => (0, Some(e.to_string())),
-    };
+    tokio::spawn(async move {
+        let result = if let Some(mid) = &mailbox_id_task {
+            do_sync(
+                &account_id_task,
+                Some(mid),
+                db_clone,
+                search_clone,
+                app_clone,
+            )
+            .await
+        } else {
+            sync_all_folders(&account_id_task, db_clone, search_clone, app_clone).await
+        };
 
-    {
-        let mut mgr = sync_mgr.lock().await;
-        mgr.finish_sync(&account_id, err.clone());
-    }
+        let err = match result {
+            Ok(_) => None,
+            Err(e) => Some(e.to_string()),
+        };
 
+        let mut mgr = sync_mgr_clone.lock().await;
+        mgr.finish_sync(&account_id_task, err);
+    });
+
+    // Return immediately to frontend
     Ok(SyncResult {
         account_id,
-        mailbox_id: request.mailbox_id,
-        new_messages: new_count,
-        error: err,
+        mailbox_id,
+        new_messages: 0,
+        error: None,
     })
 }
 
@@ -258,6 +268,15 @@ pub async fn list_threads(
         threads.retain(|t| t.triage_score.unwrap_or(0.5) >= 0.6);
     }
     Ok(threads)
+}
+
+#[tauri::command]
+pub async fn get_sync_status(
+    account_id: String,
+    sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
+) -> Result<bool, String> {
+    let mgr = sync_mgr.lock().await;
+    Ok(mgr.is_syncing(&account_id))
 }
 
 #[tauri::command]

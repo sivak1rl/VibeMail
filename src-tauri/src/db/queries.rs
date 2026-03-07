@@ -696,6 +696,92 @@ impl Database {
         };
         Ok(threads)
     }
+
+    pub fn upsert_thread_embedding(
+        &self,
+        thread_id: &str,
+        model: &str,
+        embedding: &[f32],
+    ) -> Result<()> {
+        let blob: Vec<u8> = embedding
+            .iter()
+            .flat_map(|f| f.to_ne_bytes().to_vec())
+            .collect();
+
+        self.conn.execute(
+            "INSERT INTO thread_embeddings (thread_id, model, embedding, updated_at)
+             VALUES (?1, ?2, ?3, unixepoch())
+             ON CONFLICT(thread_id) DO UPDATE SET
+             model=excluded.model, embedding=excluded.embedding, updated_at=unixepoch()",
+            rusqlite::params![thread_id, model, blob],
+        )?;
+        Ok(())
+    }
+
+    pub fn semantic_search(
+        &self,
+        account_id: &str,
+        query_embedding: &[f32],
+        model: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.thread_id, e.embedding
+             FROM thread_embeddings e
+             JOIN threads t ON e.thread_id = t.id
+             WHERE t.account_id = ?1 AND e.model = ?2",
+        )?;
+
+        let matches = stmt.query_map(rusqlite::params![account_id, model], |row| {
+            let thread_id: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            
+            // Convert Vec<u8> to Vec<f32> safely
+            let embedding: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|chunk| {
+                    let mut array = [0u8; 4];
+                    array.copy_from_slice(chunk);
+                    f32::from_ne_bytes(array)
+                })
+                .collect();
+
+            let similarity = cosine_similarity(query_embedding, &embedding);
+            Ok((thread_id, similarity))
+        })?;
+
+        let mut results: Vec<(String, f32)> = matches.collect::<rusqlite::Result<Vec<_>>>()?;
+        
+        // Filter out zero similarity (likely error or empty embeddings)
+        results.retain(|(_, sim)| *sim > 0.0);
+        
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        if !results.is_empty() {
+            tracing::info!("Top semantic match: {} (score: {:.4})", results[0].0, results[0].1);
+        }
+        
+        results.truncate(limit);
+        Ok(results)
+    }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() {
+        return 0.0;
+    }
+    let mut dot = 0.0;
+    let mut norm_a = 0.0;
+    let mut norm_b = 0.0;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+        norm_a += a[i] * a[i];
+        norm_b += b[i] * b[i];
+    }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    dot / (norm_a.sqrt() * norm_b.sqrt())
 }
 
 #[cfg(test)]
