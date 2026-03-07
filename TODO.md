@@ -13,7 +13,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] IMAP IDLE push notifications for real-time new mail
 - [ ] Retry logic with exponential backoff on transient failures
 - [ ] Sync multiple mailboxes (Sent, Drafts, Archive, Trash), not just INBOX
-- [ ] Flag sync — mark read/unread, star/flag changes propagated back to server
+- [x] Flag sync — mark read/unread, star/flag changes propagated back to server
 - [ ] Detect and handle token revocation gracefully (re-prompt OAuth)
 
 ### UI/UX
@@ -70,7 +70,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 
 ### Action Extraction
 - [ ] Parse deadlines, meeting times, TODOs from email body
-- [ ] Surface action items in a dedicated panel
+- [x] Surface action items in a dedicated panel
 - [ ] Calendar integration (add extracted events to system calendar)
 - [ ] Task list view — all extracted actions across threads
 
