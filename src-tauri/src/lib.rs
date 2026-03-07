@@ -80,6 +80,8 @@ pub fn run() {
             commands::imap::set_threads_flagged,
             commands::imap::archive_threads,
             commands::imap::move_message,
+            commands::imap::list_attachments,
+            commands::imap::open_attachment,
             commands::smtp::send_message,
             commands::ai::summarize_thread,
             commands::ai::draft_reply,

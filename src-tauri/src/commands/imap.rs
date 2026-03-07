@@ -723,7 +723,57 @@ fn format_uid_sequence_set(uids: &[u32]) -> String {
 }
 
 #[tauri::command]
-pub async fn move_message(message_id: String, target_mailbox: String) -> Result<(), String> {
+pub async fn list_attachments(
+    message_id: String,
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<Vec<Attachment>, String> {
+    let db = db.lock().await;
+    db.get_message_attachments(&message_id)
+        .map_err(|e: anyhow::Error| e.to_string())
+}
+
+#[tauri::command]
+pub async fn open_attachment(id: String, db: State<'_, Arc<Mutex<Database>>>) -> Result<(), String> {
+    let attachment = {
+        let db = db.lock().await;
+        db.get_attachment_by_id(&id)
+            .map_err(|e: anyhow::Error| e.to_string())?
+            .ok_or_else(|| "Attachment not found".to_string())?
+    };
+
+    if let Some(data) = attachment.data {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join(attachment.filename.unwrap_or_else(|| "unnamed".to_string()));
+        std::fs::write(&file_path, data).map_err(|e| e.to_string())?;
+
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", "", &file_path.to_string_lossy()])
+                .spawn();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("open")
+                .arg(&file_path)
+                .spawn();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("xdg-open")
+                .arg(&file_path)
+                .spawn();
+        }
+    } else {
+        return Err("Attachment data not available locally. Downloading not yet implemented for large files.".to_string());
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn move_message(
+message_id: String, target_mailbox: String) -> Result<(), String> {
     tracing::info!("move_message: {} -> {}", message_id, target_mailbox);
     Ok(())
 }

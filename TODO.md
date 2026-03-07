@@ -28,10 +28,10 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Empty state illustrations (no mail, no search results)
 - [ ] Loading skeleton improvements during sync
 - [x] Background progress indicators (sidebar status + reindex toast)
-- [ ] Responsive layout — collapsible sidebar, mobile-friendly thread view
-- [ ] Thread view: collapse/expand individual messages
-- [ ] Inline image rendering in HTML emails
-- [ ] Attachment download and preview (PDF, images)
+- [x] Responsive layout — collapsible sidebar, mobile-friendly thread view
+- [x] Thread view: collapse/expand individual messages
+- [x] Inline image rendering in HTML emails
+- [x] Attachment download and preview (PDF, images)
 
 ### Compose
 - [ ] Rich text editor (bold, italic, links, lists)

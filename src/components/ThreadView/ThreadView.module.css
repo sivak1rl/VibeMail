@@ -221,7 +221,71 @@
 
 .fromName { font-size: 13px; font-weight: 500; }
 .msgDate { font-size: 11px; color: var(--color-text-muted); }
-.chevron { color: var(--color-text-muted); font-size: 12px; }
+.msgHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.headerAttIcon {
+  font-size: 14px;
+  color: var(--color-text-muted);
+}
+
+.attachmentList {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--color-surface2);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  max-width: 240px;
+}
+
+.attachment:hover {
+  border-color: var(--color-accent);
+  background: var(--color-surface);
+}
+
+.attIcon { font-size: 18px; }
+
+.attInfo {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.attName {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attSize {
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.attSpinner {
+  font-size: 12px;
+  animation: spin 1s linear infinite;
+}
+
 
 .messageBody { padding: 14px; }
 

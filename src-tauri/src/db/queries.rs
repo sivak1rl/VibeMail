@@ -740,6 +740,42 @@ impl Database {
         Ok(threads)
     }
 
+    pub fn get_message_attachments(&self, message_id: &str) -> Result<Vec<Attachment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, message_id, filename, content_type, size FROM attachments WHERE message_id=?1",
+        )?;
+        let rows = stmt.query_map([message_id], |row| {
+            Ok(Attachment {
+                id: row.get(0)?,
+                message_id: row.get(1)?,
+                filename: row.get(2)?,
+                content_type: row.get(3)?,
+                size: row.get::<_, i64>(4)? as u32,
+                data: None,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_attachment_by_id(&self, id: &str) -> Result<Option<Attachment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, message_id, filename, content_type, size, data FROM attachments WHERE id=?1",
+        )?;
+        let mut rows = stmt.query([id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(Attachment {
+                id: row.get(0)?,
+                message_id: row.get(1)?,
+                filename: row.get(2)?,
+                content_type: row.get(3)?,
+                size: row.get::<_, i64>(4)? as u32,
+                data: row.get(5)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn upsert_thread_embedding(
         &self,
         thread_id: &str,

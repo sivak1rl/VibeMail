@@ -48,6 +48,7 @@ export default function Inbox({ onSettings }: Props) {
   const { autoLabelNewEmails, customCategories } = usePreferencesStore();
 
   const [showSearch, setShowSearch] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
   const [lastSelectedThreadId, setLastSelectedThreadId] = useState<string | null>(null);
   const lastSyncingRef = useRef(false);
@@ -259,28 +260,35 @@ export default function Inbox({ onSettings }: Props) {
   const mailboxTree = useMemo(() => buildMailboxTree(mailboxes), [mailboxes]);
 
   const renderMailboxTree = useCallback(
-    (nodes: MailboxTreeNode[], depth = 0) => {
+    (nodes: MailboxTreeNode[], depth = 0, collapsed = false) => {
       return nodes.map((node) => (
         <div key={node.fullName}>
           <button
             className={`${styles.navItem} ${
               node.id === selectedMailboxId ? styles.navActive : ""
             } ${!node.id ? styles.navItemVirtual : ""}`}
-            style={{ paddingLeft: `${depth * 12 + 10}px` }}
+            style={{ paddingLeft: collapsed ? "12px" : `${depth * 12 + 10}px` }}
             onClick={() => node.id && handleMailboxSelect(node.id)}
+            title={collapsed ? node.name : undefined}
           >
-            <span>{node.name}</span>
-            <span
-              className={`${styles.navBadge} ${
-                !node.mailbox || node.mailbox.unread_count === 0
-                  ? styles.navBadgeEmpty
-                  : ""
-              }`}
-            >
-              {node.mailbox?.unread_count ?? 0}
-            </span>
+            {collapsed ? (
+              <span style={{ fontSize: "16px" }}>{node.name.charAt(0).toUpperCase()}</span>
+            ) : (
+              <>
+                <span>{node.name}</span>
+                <span
+                  className={`${styles.navBadge} ${
+                    !node.mailbox || node.mailbox.unread_count === 0
+                      ? styles.navBadgeEmpty
+                      : ""
+                  }`}
+                >
+                  {node.mailbox?.unread_count ?? 0}
+                </span>
+              </>
+            )}
           </button>
-          {node.children.length > 0 && renderMailboxTree(node.children, depth + 1)}
+          {!collapsed && node.children.length > 0 && renderMailboxTree(node.children, depth + 1)}
         </div>
       ));
     },
@@ -290,16 +298,25 @@ export default function Inbox({ onSettings }: Props) {
   return (
     <div className={styles.layout}>
       {/* Sidebar */}
-      <div className={styles.sidebar}>
+      <div className={`${styles.sidebar} ${sidebarCollapsed ? styles.sidebarCollapsed : ""}`}>
         <div className={styles.sidebarHeader}>
-          <span className={styles.logo}>VibeMail</span>
-          <button className={styles.settingsBtn} onClick={onSettings} title="Settings">
-            ⚙
+          <button
+            className={styles.toggleBtn}
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          >
+            ☰
           </button>
+          {!sidebarCollapsed && <span className={styles.logo}>VibeMail</span>}
+          {!sidebarCollapsed && (
+            <button className={styles.settingsBtn} onClick={onSettings} title="Settings">
+              ⚙
+            </button>
+          )}
         </div>
 
         {/* Account list */}
-        {accounts.length > 1 && (
+        {!sidebarCollapsed && accounts.length > 1 && (
           <div className={styles.accounts}>
             {accounts.map((acc) => (
               <button
@@ -317,20 +334,20 @@ export default function Inbox({ onSettings }: Props) {
 
         {/* Mailbox nav */}
         <div className={styles.nav}>
-          {mailboxesLoading && <div className={styles.navHint}>Loading folders…</div>}
-          {!mailboxesLoading && mailboxError && (
+          {!sidebarCollapsed && mailboxesLoading && <div className={styles.navHint}>Loading folders…</div>}
+          {!sidebarCollapsed && !mailboxesLoading && mailboxError && (
             <div className={styles.navHint}>Folders unavailable</div>
           )}
-          {!mailboxesLoading && !mailboxError && mailboxes.length === 0 && (
+          {!sidebarCollapsed && !mailboxesLoading && !mailboxError && mailboxes.length === 0 && (
             <div className={styles.navHint}>No folders yet</div>
           )}
-          {renderMailboxTree(mailboxTree)}
+          {renderMailboxTree(mailboxTree, 0, sidebarCollapsed)}
         </div>
 
         {syncing && syncProgress && (
           <div className={styles.sidebarStatus}>
             <span className={styles.statusSpinner}>⟳</span>
-            <span className={styles.statusText}>{syncProgress}</span>
+            {!sidebarCollapsed && <span className={styles.statusText}>{syncProgress}</span>}
           </div>
         )}
       </div>

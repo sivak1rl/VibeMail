@@ -107,6 +107,16 @@ pub struct ExtractedAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Attachment {
+    pub id: String,
+    pub message_id: String,
+    pub filename: Option<String>,
+    pub content_type: Option<String>,
+    pub size: u32,
+    pub data: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComposeMessage {
     pub account_id: String,
     pub to: Vec<EmailAddress>,
