@@ -139,10 +139,12 @@ pub async fn reindex_all_semantic(
 
             for thread in threads {
                 count += 1;
-                let _ = app_clone.emit(
-                    "reindex-progress",
-                    format!("Embedding thread {} of {}…", count, total),
-                );
+                if total < 50 || count % 10 == 0 || count == total {
+                    let _ = app_clone.emit(
+                        "reindex-progress",
+                        format!("Embedding thread {} of {}…", count, total),
+                    );
+                }
 
                 let messages = {
                     let db = db_clone.lock().await;
@@ -152,10 +154,13 @@ pub async fn reindex_all_semantic(
 
                 if messages.is_empty() { continue; }
 
+                let body = messages[0].body_text.as_deref().or(messages[0].body_html.as_deref()).unwrap_or("");
+                let body_truncated: String = body.chars().take(2000).collect();
+
                 let context = format!(
                     "Subject: {}\n\n{}",
                     thread.subject.as_deref().unwrap_or("(no subject)"),
-                    messages[0].body_text.as_deref().or(messages[0].body_html.as_deref()).unwrap_or("")
+                    body_truncated
                 );
 
                 match ai_clone.embed(&context).await {

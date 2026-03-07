@@ -768,6 +768,7 @@ impl Database {
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
+        tracing::warn!("Cosine similarity length mismatch: query {} vs stored {}. Reindexing may be required.", a.len(), b.len());
         return 0.0;
     }
     let mut dot = 0.0;
