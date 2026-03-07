@@ -1,6 +1,6 @@
 pub mod models;
 pub mod queries;
-mod schema;
+pub(crate) mod schema;
 
 use anyhow::Result;
 use rusqlite::Connection;

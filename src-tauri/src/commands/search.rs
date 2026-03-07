@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 pub struct SearchRequest {
     pub query: String,
     pub account_id: String,
+    pub mailbox_id: Option<String>,
     pub limit: Option<u32>,
 }
 
@@ -20,7 +21,12 @@ pub async fn search_messages(
     let limit = request.limit.unwrap_or(20);
     let db = db.lock().await;
     let thread_ids = db
-        .fts_search(&request.query, &request.account_id, limit)
+        .fts_search(
+            &request.query,
+            &request.account_id,
+            request.mailbox_id.as_deref(),
+            limit,
+        )
         .map_err(|e| e.to_string())?;
     db.get_threads_by_ids(&thread_ids)
         .map_err(|e| e.to_string())
@@ -35,8 +41,11 @@ pub async fn search_semantic(
     let limit = request.limit.unwrap_or(20) as usize;
     let thread_ids = {
         let search = search.lock().await;
-        search.search(&request.query, limit).map_err(|e| e.to_string())?
+        search
+            .search(&request.query, limit)
+            .map_err(|e| e.to_string())?
     };
     let db = db.lock().await;
-    db.get_threads_by_ids(&thread_ids).map_err(|e| e.to_string())
+    db.get_threads_by_ids(&thread_ids)
+        .map_err(|e| e.to_string())
 }

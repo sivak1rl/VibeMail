@@ -1,18 +1,23 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchStore } from "../../stores/search";
 import { useAccountStore } from "../../stores/accounts";
 import styles from "./SearchBar.module.css";
 
 interface Props {
+  mailboxId?: string | null;
   onResults: () => void;
   onClear: () => void;
 }
 
-export default function SearchBar({ onResults, onClear }: Props) {
+export default function SearchBar({ mailboxId = null, onResults, onClear }: Props) {
   const { activeAccountId } = useAccountStore();
   const { query, searching, search, clear } = useSearchStore();
   const [localQuery, setLocalQuery] = useState(query);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setLocalQuery(query);
+  }, [query]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -28,7 +33,7 @@ export default function SearchBar({ onResults, onClear }: Props) {
 
     timerRef.current = setTimeout(async () => {
       if (!activeAccountId) return;
-      await search(val, activeAccountId);
+      await search(val, activeAccountId, mailboxId);
       onResults();
     }, 350);
   };

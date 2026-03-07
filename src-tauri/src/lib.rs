@@ -50,9 +50,9 @@ pub fn run() {
             let search = search::SearchIndex::open(&search_dir)?;
             let search = Arc::new(tokio::sync::Mutex::new(search));
 
-            let ai_router = Arc::new(tokio::sync::Mutex::new(
-                ai::router::AiRouter::new(db.clone()),
-            ));
+            let ai_router = Arc::new(tokio::sync::Mutex::new(ai::router::AiRouter::new(
+                db.clone(),
+            )));
 
             app.manage(db);
             app.manage(search);
@@ -73,6 +73,7 @@ pub fn run() {
             commands::accounts::await_oauth_redirect,
             commands::accounts::complete_oauth,
             commands::imap::sync_account,
+            commands::imap::list_mailboxes,
             commands::imap::list_threads,
             commands::imap::get_thread,
             commands::imap::mark_read,

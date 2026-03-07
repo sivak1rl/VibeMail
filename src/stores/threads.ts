@@ -59,10 +59,10 @@ interface ThreadStore {
   syncProgress: string | null;
   focusMode: boolean;
   hasMore: boolean;
-  fetchThreads: (accountId: string, focusOnly?: boolean) => Promise<void>;
-  loadMoreThreads: (accountId: string) => Promise<void>;
+  fetchThreads: (accountId: string, mailboxId?: string | null, focusOnly?: boolean) => Promise<void>;
+  loadMoreThreads: (accountId: string, mailboxId?: string | null) => Promise<void>;
   selectThread: (threadId: string) => Promise<void>;
-  syncAccount: (accountId: string) => Promise<SyncResult>;
+  syncAccount: (accountId: string, mailboxId?: string | null) => Promise<SyncResult>;
   setFocusMode: (v: boolean) => void;
 }
 
@@ -77,25 +77,35 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
   focusMode: false,
   hasMore: true,
 
-  fetchThreads: async (accountId, focusOnly = false) => {
-    set({ loading: true });
+  fetchThreads: async (accountId, mailboxId = null, focusOnly = false) => {
+    set({ loading: true, selectedThreadId: null, threadMessages: [] });
     try {
       const PAGE = 50;
       const threads = await invoke<Thread[]>("list_threads", {
         request: {
           account_id: accountId,
+          mailbox_id: mailboxId,
           limit: PAGE,
           offset: 0,
           focus_only: focusOnly,
         },
       });
-      set({ threads, loading: false, hasMore: threads.length >= PAGE });
+      set({
+        threads,
+        loading: false,
+        hasMore: threads.length >= PAGE,
+        selectedThreadId: threads[0]?.id ?? null,
+      });
+
+      if (threads[0]?.id) {
+        await get().selectThread(threads[0].id);
+      }
     } catch (e) {
       set({ loading: false });
     }
   },
 
-  loadMoreThreads: async (accountId) => {
+  loadMoreThreads: async (accountId, mailboxId = null) => {
     const { threads, loading, hasMore, focusMode } = get();
     if (loading || !hasMore) return;
     set({ loading: true });
@@ -104,6 +114,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
       const more = await invoke<Thread[]>("list_threads", {
         request: {
           account_id: accountId,
+          mailbox_id: mailboxId,
           limit: PAGE,
           offset: threads.length,
           focus_only: focusMode,
@@ -129,7 +140,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
     }
   },
 
-  syncAccount: async (accountId) => {
+  syncAccount: async (accountId, mailboxId = null) => {
     set({ syncing: true, syncError: null, syncProgress: "Starting sync…" });
     let unlisten: UnlistenFn | null = null;
     try {
@@ -139,7 +150,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
       const result = await invoke<SyncResult>("sync_account", { accountId });
       set({ syncing: false, syncError: result.error, syncProgress: null });
       if (!result.error) {
-        await get().fetchThreads(accountId, get().focusMode);
+        await get().fetchThreads(accountId, mailboxId, get().focusMode);
       }
       return result;
     } catch (e) {

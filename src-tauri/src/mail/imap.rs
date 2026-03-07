@@ -44,7 +44,11 @@ pub async fn connect_imap(account: &Account) -> Result<ImapSession> {
         let addrs: Vec<_> = lookup_host(format!("{}:{}", account.imap_host, account.imap_port))
             .await?
             .collect();
-        debug!("Resolved {} to {} addresses", account.imap_host, addrs.len());
+        debug!(
+            "Resolved {} to {} addresses",
+            account.imap_host,
+            addrs.len()
+        );
         addrs
             .iter()
             .find(|a| a.is_ipv4())
@@ -53,12 +57,9 @@ pub async fn connect_imap(account: &Account) -> Result<ImapSession> {
             .ok_or_else(|| anyhow!("DNS resolved no addresses for {}", account.imap_host))?
     };
 
-    let tcp = tokio::time::timeout(
-        Duration::from_secs(15),
-        TcpStream::connect(addr),
-    )
-    .await
-    .map_err(|_| anyhow!("IMAP TCP connect timed out"))??;
+    let tcp = tokio::time::timeout(Duration::from_secs(15), TcpStream::connect(addr))
+        .await
+        .map_err(|_| anyhow!("IMAP TCP connect timed out"))??;
 
     let tls_stream = tokio::time::timeout(
         Duration::from_secs(15),
@@ -80,7 +81,13 @@ pub async fn connect_imap(account: &Account) -> Result<ImapSession> {
             let encoded = oauth::build_xoauth2(&account.email, &access_token);
             tokio::time::timeout(
                 Duration::from_secs(15),
-                client.authenticate("XOAUTH2", XOAuth2 { encoded, sent: false }),
+                client.authenticate(
+                    "XOAUTH2",
+                    XOAuth2 {
+                        encoded,
+                        sent: false,
+                    },
+                ),
             )
             .await
             .map_err(|_| anyhow!("IMAP XOAUTH2 auth timed out"))?
@@ -204,7 +211,9 @@ pub async fn sync_mailbox(
             }
             all_messages.extend(batch_messages);
 
-            if cursor < 1 { break; }
+            if cursor < 1 {
+                break;
+            }
         }
     } else {
         // Incremental sync: fetch from last uid_next upward
@@ -217,10 +226,7 @@ pub async fn sync_mailbox(
             let batch_end = (batch_start + batch_size - 1).min(server_uid_next);
             let uid_range = format!("{}:{}", batch_start, batch_end);
 
-            on_progress(&format!(
-                "Fetching new mail… {} so far",
-                all_messages.len()
-            ));
+            on_progress(&format!("Fetching new mail… {} so far", all_messages.len()));
 
             info!(
                 "Fetching UIDs {}..{} from {}/{}",
@@ -273,7 +279,7 @@ fn parse_fetches(
             Some(b) => b,
             None => continue,
         };
-        let msg_id = format!("{}:{}", account.id, uid);
+        let msg_id = format!("{}:{}:{}", account.id, mailbox.id, uid);
         match parser::parse_message(raw, &msg_id, &account.id, &mailbox.id, uid) {
             Ok(mut msg) => {
                 msg.flags = fetch
@@ -310,7 +316,11 @@ async fn persist_batch(
 }
 
 pub async fn list_mailboxes(session: &mut ImapSession, account_id: &str) -> Result<Vec<Mailbox>> {
-    let boxes: Vec<_> = session.list(Some(""), Some("*")).await?.try_collect().await?;
+    let boxes: Vec<_> = session
+        .list(Some(""), Some("*"))
+        .await?
+        .try_collect()
+        .await?;
     let mailboxes = boxes
         .iter()
         .map(|b| Mailbox {

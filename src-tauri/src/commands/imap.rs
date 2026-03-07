@@ -16,9 +16,16 @@ pub struct SyncResult {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ListThreadsRequest {
     pub account_id: String,
+    pub mailbox_id: Option<String>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
     pub focus_only: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListMailboxesRequest {
+    pub account_id: String,
+    pub refresh: Option<bool>,
 }
 
 #[tauri::command]
@@ -92,11 +99,13 @@ async fn do_sync(
 
     let _ = app.emit("sync-progress", "Connecting to IMAP…");
 
-    let messages =
-        mail_imap::sync_mailbox(&mut session, &account, &mut mailbox, db.clone(), {
-            let app = app.clone();
-            move |status: &str| { let _ = app.emit("sync-progress", status); }
-        }).await?;
+    let messages = mail_imap::sync_mailbox(&mut session, &account, &mut mailbox, db.clone(), {
+        let app = app.clone();
+        move |status: &str| {
+            let _ = app.emit("sync-progress", status);
+        }
+    })
+    .await?;
     let count = messages.len();
 
     let _ = app.emit("sync-progress", format!("Indexing {} messages…", count));
@@ -107,7 +116,11 @@ async fn do_sync(
             if let Some(thread_id) = &msg.thread_id {
                 let subject = msg.subject.as_deref().unwrap_or_default();
                 let body = msg.body_text.as_deref().unwrap_or_default();
-                let sender = msg.from.first().map(|a| a.email.as_str()).unwrap_or_default();
+                let sender = msg
+                    .from
+                    .first()
+                    .map(|a| a.email.as_str())
+                    .unwrap_or_default();
                 let _ = search.add_document(thread_id, subject, body, sender);
             }
         }
@@ -126,13 +139,79 @@ pub async fn list_threads(
     let offset = request.offset.unwrap_or(0);
     let db = db.lock().await;
     let mut threads = db
-        .list_threads(&request.account_id, limit, offset)
+        .list_threads(
+            &request.account_id,
+            request.mailbox_id.as_deref(),
+            limit,
+            offset,
+        )
         .map_err(|e| e.to_string())?;
 
     if request.focus_only.unwrap_or(false) {
         threads.retain(|t| t.triage_score.unwrap_or(0.5) >= 0.6);
     }
     Ok(threads)
+}
+
+#[tauri::command]
+pub async fn list_mailboxes(
+    request: ListMailboxesRequest,
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<Vec<Mailbox>, String> {
+    let account = {
+        let db = db.lock().await;
+        db.list_accounts()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|a| a.id == request.account_id)
+            .ok_or_else(|| "Account not found".to_string())?
+    };
+
+    if request.refresh.unwrap_or(false) {
+        let mut session = mail_imap::connect_imap(&account)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mailboxes = mail_imap::list_mailboxes(&mut session, &request.account_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        {
+            let db = db.lock().await;
+            for mailbox in &mailboxes {
+                db.upsert_mailbox(mailbox).map_err(|e| e.to_string())?;
+            }
+        }
+
+        let _ = session.logout().await;
+        return Ok(mailboxes);
+    }
+
+    let cached = {
+        let db = db.lock().await;
+        db.list_mailboxes(&request.account_id)
+            .map_err(|e| e.to_string())?
+    };
+
+    if !cached.is_empty() {
+        return Ok(cached);
+    }
+
+    let mut session = mail_imap::connect_imap(&account)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mailboxes = mail_imap::list_mailboxes(&mut session, &request.account_id)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    {
+        let db = db.lock().await;
+        for mailbox in &mailboxes {
+            db.upsert_mailbox(mailbox).map_err(|e| e.to_string())?;
+        }
+    }
+
+    let _ = session.logout().await;
+    Ok(mailboxes)
 }
 
 #[tauri::command]

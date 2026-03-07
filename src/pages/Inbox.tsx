@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useAccountStore } from "../stores/accounts";
+import { useMailboxStore } from "../stores/mailboxes";
 import { useThreadStore } from "../stores/threads";
 import { useSearchStore } from "../stores/search";
 import { useAiStore } from "../stores/ai";
@@ -14,6 +15,14 @@ interface Props {
 
 export default function Inbox({ onSettings }: Props) {
   const { accounts, activeAccountId, setActiveAccount } = useAccountStore();
+  const {
+    mailboxes,
+    selectedMailboxId,
+    loading: mailboxesLoading,
+    error: mailboxError,
+    fetchMailboxes,
+    selectMailbox,
+  } = useMailboxStore();
   const {
     threads,
     selectedThreadId,
@@ -30,7 +39,7 @@ export default function Inbox({ onSettings }: Props) {
     loadMoreThreads,
     hasMore,
   } = useThreadStore();
-  const { results: searchResults, query: searchQuery } = useSearchStore();
+  const { results: searchResults, query: searchQuery, clear: clearSearch } = useSearchStore();
   const { loadConfig } = useAiStore();
 
   const [showSearch, setShowSearch] = useState(false);
@@ -41,22 +50,37 @@ export default function Inbox({ onSettings }: Props) {
 
   useEffect(() => {
     if (activeAccountId) {
-      // Auto-sync then load threads on first mount / account switch
-      syncAccount(activeAccountId).finally(() => {
-        fetchThreads(activeAccountId, focusMode);
-      });
+      setShowSearch(false);
+      clearSearch();
+      void (async () => {
+        await fetchMailboxes(activeAccountId);
+        const initialMailboxId = useMailboxStore.getState().selectedMailboxId;
+        await syncAccount(activeAccountId, initialMailboxId);
+      })();
     }
-  }, [activeAccountId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeAccountId, clearSearch, fetchMailboxes, syncAccount]);
+
+  useEffect(() => {
+    if (activeAccountId && selectedMailboxId) {
+      void fetchThreads(activeAccountId, selectedMailboxId, focusMode);
+    }
+  }, [activeAccountId, selectedMailboxId, focusMode, fetchThreads]);
 
   const handleSync = useCallback(async () => {
     if (!activeAccountId) return;
-    await syncAccount(activeAccountId);
-  }, [activeAccountId, syncAccount]);
+    await syncAccount(activeAccountId, selectedMailboxId);
+  }, [activeAccountId, selectedMailboxId, syncAccount]);
 
   const handleLoadMore = useCallback(() => {
     if (!activeAccountId) return;
-    loadMoreThreads(activeAccountId);
-  }, [activeAccountId, loadMoreThreads]);
+    loadMoreThreads(activeAccountId, selectedMailboxId);
+  }, [activeAccountId, selectedMailboxId, loadMoreThreads]);
+
+  const handleMailboxSelect = useCallback((mailboxId: string) => {
+    selectMailbox(mailboxId);
+    setShowSearch(false);
+    clearSearch();
+  }, [clearSearch, selectMailbox]);
 
   const displayedThreads = showSearch && searchQuery ? searchResults : threads;
   const selectedThread = displayedThreads.find((t) => t.id === selectedThreadId) ?? null;
@@ -91,7 +115,24 @@ export default function Inbox({ onSettings }: Props) {
 
         {/* Mailbox nav */}
         <div className={styles.nav}>
-          <button className={`${styles.navItem} ${styles.navActive}`}>Inbox</button>
+          {mailboxesLoading && <div className={styles.navHint}>Loading folders…</div>}
+          {!mailboxesLoading && mailboxError && (
+            <div className={styles.navHint}>Folders unavailable</div>
+          )}
+          {!mailboxesLoading && !mailboxError && mailboxes.length === 0 && (
+            <div className={styles.navHint}>No folders yet</div>
+          )}
+          {mailboxes.map((mailbox) => (
+            <button
+              key={mailbox.id}
+              className={`${styles.navItem} ${
+                mailbox.id === selectedMailboxId ? styles.navActive : ""
+              }`}
+              onClick={() => handleMailboxSelect(mailbox.id)}
+            >
+              {mailbox.name}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -100,6 +141,7 @@ export default function Inbox({ onSettings }: Props) {
         <div className={styles.listHeader}>
           <div className={styles.searchRow}>
             <SearchBar
+              mailboxId={selectedMailboxId}
               onResults={() => setShowSearch(true)}
               onClear={() => setShowSearch(false)}
             />

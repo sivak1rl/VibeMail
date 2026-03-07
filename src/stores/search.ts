@@ -7,7 +7,7 @@ interface SearchStore {
   results: Thread[];
   searching: boolean;
   setQuery: (q: string) => void;
-  search: (query: string, accountId: string) => Promise<void>;
+  search: (query: string, accountId: string, mailboxId?: string | null) => Promise<void>;
   clear: () => void;
 }
 
@@ -18,7 +18,7 @@ export const useSearchStore = create<SearchStore>((set) => ({
 
   setQuery: (q) => set({ query: q }),
 
-  search: async (query, accountId) => {
+  search: async (query, accountId, mailboxId = null) => {
     if (!query.trim()) {
       set({ results: [], query: "" });
       return;
@@ -26,7 +26,7 @@ export const useSearchStore = create<SearchStore>((set) => ({
     set({ searching: true, query });
     try {
       const results = await invoke<Thread[]>("search_messages", {
-        request: { query, account_id: accountId, limit: 30 },
+        request: { query, account_id: accountId, mailbox_id: mailboxId, limit: 30 },
       });
       set({ results, searching: false });
     } catch (e) {

@@ -57,7 +57,18 @@
 .accountBtn:hover { background: var(--color-surface2); }
 .accountActive { background: var(--color-surface2) !important; color: var(--color-text) !important; }
 
-.nav { padding: 8px; }
+.nav {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.navHint {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
 
 .navItem {
   width: 100%;
