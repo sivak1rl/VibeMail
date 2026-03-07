@@ -109,6 +109,12 @@ CREATE TABLE IF NOT EXISTS ai_log (
     created_at  INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
+CREATE TABLE IF NOT EXISTS thread_actions (
+    thread_id    TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+    actions_json TEXT NOT NULL,
+    updated_at   INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 -- Full-text search
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     subject,

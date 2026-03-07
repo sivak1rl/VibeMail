@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DOMPurify from "dompurify";
 import { formatDistanceToNow } from "date-fns";
 import type { Message, Thread } from "../../stores/threads";
@@ -49,7 +49,12 @@ function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean 
 
 export default function ThreadView({ thread, messages }: Props) {
   const [showCompose, setShowCompose] = useState(false);
-  const { actionsByThread } = useAiStore();
+  const { actionsByThread, loadThreadInsights } = useAiStore();
+
+  useEffect(() => {
+    if (!thread) return;
+    void loadThreadInsights(thread.id);
+  }, [thread, loadThreadInsights]);
 
   if (!thread) {
     return (

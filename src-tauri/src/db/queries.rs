@@ -12,6 +12,7 @@ pub struct MailboxStats {
 
 #[derive(Debug, Clone)]
 pub struct ThreadMessageLocation {
+    pub thread_id: String,
     pub account_id: String,
     pub mailbox_id: String,
     pub uid: u32,
@@ -190,7 +191,10 @@ impl Database {
                cc=excluded.cc, date=excluded.date, body_text=excluded.body_text,
                body_html=excluded.body_html, references_ids=excluded.references_ids,
                in_reply_to=excluded.in_reply_to, flags=excluded.flags,
-               has_attachments=excluded.has_attachments, synced_at=unixepoch()"#,
+               has_attachments=excluded.has_attachments,
+               triage_score=COALESCE(excluded.triage_score, messages.triage_score),
+               ai_summary=COALESCE(excluded.ai_summary, messages.ai_summary),
+               synced_at=unixepoch()"#,
             rusqlite::params![
                 msg.id,
                 msg.account_id,
@@ -225,7 +229,11 @@ impl Database {
                subject=excluded.subject, participant_ids=excluded.participant_ids,
                message_count=excluded.message_count, unread_count=excluded.unread_count,
                last_date=excluded.last_date, last_from=excluded.last_from,
-               triage_score=excluded.triage_score, labels=excluded.labels,
+               triage_score=COALESCE(excluded.triage_score, threads.triage_score),
+               labels=CASE
+                 WHEN excluded.labels = '[]' THEN COALESCE(threads.labels, excluded.labels)
+                 ELSE excluded.labels
+               END,
                updated_at=unixepoch()"#,
             rusqlite::params![
                 thread.id, thread.account_id, thread.subject,
@@ -410,6 +418,54 @@ impl Database {
         Ok(())
     }
 
+    pub fn upsert_thread_actions(
+        &self,
+        thread_id: &str,
+        actions: &[ExtractedAction],
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT INTO thread_actions (thread_id, actions_json)
+               VALUES (?1, ?2)
+               ON CONFLICT(thread_id) DO UPDATE SET
+               actions_json=excluded.actions_json,
+               updated_at=unixepoch()"#,
+            rusqlite::params![thread_id, serde_json::to_string(actions)?],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_thread_actions(&self, thread_id: &str) -> Result<Vec<ExtractedAction>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT actions_json FROM thread_actions WHERE thread_id=?1")?;
+        let mut rows = stmt.query([thread_id])?;
+        if let Some(row) = rows.next()? {
+            let raw: String = row.get(0)?;
+            Ok(serde_json::from_str(&raw).unwrap_or_default())
+        } else {
+            Ok(vec![])
+        }
+    }
+
+    pub fn get_thread_summary(&self, thread_id: &str) -> Result<Option<String>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT ai_summary
+               FROM messages
+               WHERE thread_id=?1
+                 AND ai_summary IS NOT NULL
+                 AND ai_summary != ''
+               ORDER BY date DESC
+               LIMIT 1"#,
+        )?;
+        let mut rows = stmt.query([thread_id])?;
+        if let Some(row) = rows.next()? {
+            let summary: Option<String> = row.get(0)?;
+            Ok(summary)
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn set_thread_read_state(&self, thread_id: &str, read: bool) -> Result<()> {
         let mut stmt = self
             .conn
@@ -468,10 +524,10 @@ impl Database {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT account_id, mailbox_id, uid
+            "SELECT thread_id, account_id, mailbox_id, uid
              FROM messages
              WHERE thread_id IN ({})
-             ORDER BY account_id, mailbox_id, uid",
+             ORDER BY thread_id, account_id, mailbox_id, uid",
             placeholders
         );
 
@@ -482,9 +538,10 @@ impl Database {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params.as_slice(), |row| {
             Ok(ThreadMessageLocation {
-                account_id: row.get(0)?,
-                mailbox_id: row.get(1)?,
-                uid: row.get::<_, i64>(2)? as u32,
+                thread_id: row.get(0)?,
+                account_id: row.get(1)?,
+                mailbox_id: row.get(2)?,
+                uid: row.get::<_, i64>(3)? as u32,
             })
         })?;
 

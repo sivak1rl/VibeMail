@@ -18,6 +18,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use tauri::{AppHandle, State};
 use tokio::sync::Mutex;
+use tokio::time::{timeout, Duration};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AiThreadRequest {
@@ -41,6 +42,13 @@ pub struct CategorizeThreadsRequest {
 pub struct CategorizeThreadResult {
     pub thread_id: String,
     pub label: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ThreadInsights {
+    pub thread_id: String,
+    pub summary: Option<String>,
+    pub actions: Vec<ExtractedAction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,7 +210,13 @@ pub async fn extract_actions(
             .map_err(|e| e.to_string())?
     };
 
-    parse_extracted_actions(&response).map_err(|e| e.to_string())
+    let actions = parse_extracted_actions(&response).map_err(|e| e.to_string())?;
+    {
+        let db = db.lock().await;
+        db.upsert_thread_actions(&request.thread_id, &actions)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(actions)
 }
 
 #[tauri::command]
@@ -330,10 +344,13 @@ pub async fn categorize_threads(
 
         let response = {
             let router = router.lock().await;
-            router
-                .complete(TaskKind::Extract, chat_messages)
-                .await
-                .map_err(|e| e.to_string())?
+            timeout(
+                Duration::from_secs(45),
+                router.complete(TaskKind::Extract, chat_messages),
+            )
+            .await
+            .map_err(|_| "Categorization timed out".to_string())?
+            .map_err(|e| e.to_string())?
         };
         let label = parse_category_label(&response, &allowed_labels);
         let account_id = messages[0].account_id.clone();
@@ -489,71 +506,87 @@ async fn sync_gmail_category_labels_for_account(
         return Ok(());
     }
 
+    let (mailbox_names, remove_targets, add_targets) = {
+        let db = db.lock().await;
+        let label_by_thread = updates
+            .iter()
+            .map(|update| (update.thread_id.clone(), update.label.clone()))
+            .collect::<HashMap<_, _>>();
+        let thread_ids = updates
+            .iter()
+            .map(|update| update.thread_id.clone())
+            .collect::<Vec<_>>();
+        let locations = db
+            .get_thread_message_locations(&thread_ids)
+            .map_err(|e| e.to_string())?;
+
+        let mut mailbox_names = HashMap::new();
+        let mut remove_targets: HashMap<String, BTreeSet<u32>> = HashMap::new();
+        let mut add_targets: HashMap<(String, String), BTreeSet<u32>> = HashMap::new();
+        for location in locations {
+            if let Some(label) = label_by_thread.get(&location.thread_id) {
+                remove_targets
+                    .entry(location.mailbox_id.clone())
+                    .or_default()
+                    .insert(location.uid);
+                add_targets
+                    .entry((location.mailbox_id.clone(), label.clone()))
+                    .or_default()
+                    .insert(location.uid);
+
+                if !mailbox_names.contains_key(&location.mailbox_id) {
+                    let mailbox = db
+                        .get_mailbox_by_id(&account.id, &location.mailbox_id)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| format!("Mailbox not found: {}", location.mailbox_id))?;
+                    mailbox_names.insert(location.mailbox_id.clone(), mailbox.name);
+                }
+            }
+        }
+        (mailbox_names, remove_targets, add_targets)
+    };
+
+    if remove_targets.is_empty() {
+        return Ok(());
+    }
+
     let mut session = mail_imap::connect_imap(account)
         .await
         .map_err(|e| e.to_string())?;
     let remove_arg = format_gmail_label_list(allowed_labels);
 
-    for update in updates {
-        let targets = {
-            let db = db.lock().await;
-            let locations = db
-                .get_thread_message_locations(std::slice::from_ref(&update.thread_id))
-                .map_err(|e| e.to_string())?;
-            if locations.is_empty() {
+    for (mailbox_id, remove_uids) in remove_targets {
+        let mailbox_name = mailbox_names
+            .get(&mailbox_id)
+            .ok_or_else(|| format!("Mailbox name missing for {}", mailbox_id))?;
+        timeout(Duration::from_secs(20), session.select(mailbox_name))
+            .await
+            .map_err(|_| "IMAP select timed out".to_string())?
+            .map_err(|e| e.to_string())?;
+
+        let remove_uid_list = remove_uids.into_iter().collect::<Vec<_>>();
+        for chunk in remove_uid_list.chunks(250) {
+            run_uid_store(
+                &mut session,
+                chunk,
+                &format!("-X-GM-LABELS.SILENT {}", remove_arg),
+            )
+            .await?;
+        }
+
+        for ((target_mailbox_id, label), add_uids) in &add_targets {
+            if target_mailbox_id != &mailbox_id {
                 continue;
             }
-
-            let mut uids_by_mailbox: HashMap<String, BTreeSet<u32>> = HashMap::new();
-            for location in locations {
-                uids_by_mailbox
-                    .entry(location.mailbox_id)
-                    .or_default()
-                    .insert(location.uid);
-            }
-
-            let mut targets = Vec::new();
-            for (mailbox_id, uids) in uids_by_mailbox {
-                let mailbox = db
-                    .get_mailbox_by_id(&account.id, &mailbox_id)
-                    .map_err(|e| e.to_string())?
-                    .ok_or_else(|| format!("Mailbox not found: {}", mailbox_id))?;
-                targets.push((mailbox.name, uids.into_iter().collect::<Vec<_>>()));
-            }
-            targets
-        };
-
-        let add_arg = format_gmail_label_list(&[update.label.clone()]);
-        for (mailbox_name, uids) in targets {
-            session
-                .select(&mailbox_name)
-                .await
-                .map_err(|e| e.to_string())?;
-            for chunk in uids.chunks(250) {
-                let sequence_set = format_uid_sequence_set(chunk);
-                if sequence_set.is_empty() {
-                    continue;
-                }
-
-                let remove_cmd = format!("-X-GM-LABELS.SILENT {}", remove_arg);
-                let mut removed = session
-                    .uid_store(&sequence_set, &remove_cmd)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                while removed
-                    .try_next()
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .is_some()
-                {}
-                drop(removed);
-
-                let add_cmd = format!("+X-GM-LABELS.SILENT {}", add_arg);
-                let mut added = session
-                    .uid_store(&sequence_set, &add_cmd)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                while added.try_next().await.map_err(|e| e.to_string())?.is_some() {}
+            let add_arg = format_gmail_label_list(std::slice::from_ref(label));
+            let add_uid_list = add_uids.iter().copied().collect::<Vec<_>>();
+            for chunk in add_uid_list.chunks(250) {
+                run_uid_store(
+                    &mut session,
+                    chunk,
+                    &format!("+X-GM-LABELS.SILENT {}", add_arg),
+                )
+                .await?;
             }
         }
     }
@@ -607,10 +640,55 @@ fn format_uid_sequence_set(uids: &[u32]) -> String {
     ranges.join(",")
 }
 
+async fn run_uid_store(
+    session: &mut mail_imap::ImapSession,
+    uids: &[u32],
+    command: &str,
+) -> Result<(), String> {
+    let sequence_set = format_uid_sequence_set(uids);
+    if sequence_set.is_empty() {
+        return Ok(());
+    }
+
+    let mut stream = timeout(
+        Duration::from_secs(20),
+        session.uid_store(&sequence_set, command),
+    )
+    .await
+    .map_err(|_| "IMAP uid_store timed out".to_string())?
+    .map_err(|e| e.to_string())?;
+    while stream
+        .try_next()
+        .await
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {}
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_ai_config(db: State<'_, Arc<Mutex<Database>>>) -> Result<AiConfig, String> {
     let db = db.lock().await;
     db.get_ai_config().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_thread_insights(
+    request: AiThreadRequest,
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<ThreadInsights, String> {
+    let db = db.lock().await;
+    let summary = db
+        .get_thread_summary(&request.thread_id)
+        .map_err(|e| e.to_string())?;
+    let actions = db
+        .get_thread_actions(&request.thread_id)
+        .map_err(|e| e.to_string())?;
+    Ok(ThreadInsights {
+        thread_id: request.thread_id,
+        summary,
+        actions,
+    })
 }
 
 #[derive(Debug, Deserialize)]

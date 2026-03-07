@@ -86,6 +86,7 @@ pub fn run() {
             commands::ai::triage_thread,
             commands::ai::categorize_threads,
             commands::ai::get_ai_config,
+            commands::ai::get_thread_insights,
             commands::ai::set_ai_config,
             commands::search::search_messages,
             commands::search::search_semantic,

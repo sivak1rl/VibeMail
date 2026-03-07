@@ -36,6 +36,12 @@ export interface CustomCategory {
   examples: string[];
 }
 
+interface ThreadInsights {
+  thread_id: string;
+  summary: string | null;
+  actions: ExtractedAction[];
+}
+
 interface AiState {
   config: AiConfig | null;
   summaryByThread: Record<string, string>;
@@ -51,6 +57,7 @@ interface AiState {
   saveConfig: (config: AiConfig, apiKey?: string) => Promise<void>;
   summarizeThread: (threadId: string) => Promise<void>;
   summarizeThreads: (threadIds: string[]) => Promise<void>;
+  loadThreadInsights: (threadId: string) => Promise<void>;
   categorizeThreads: (
     threadIds: string[],
     customCategories?: CustomCategory[],
@@ -137,6 +144,19 @@ export const useAiStore = create<AiState>((set, get) => ({
     } finally {
       set({ batchSummarizing: false });
     }
+  },
+
+  loadThreadInsights: async (threadId) => {
+    const insights = await invoke<ThreadInsights>("get_thread_insights", {
+      request: { thread_id: threadId, account_id: "" },
+    });
+    set((s) => ({
+      summaryByThread:
+        insights.summary !== null
+          ? { ...s.summaryByThread, [threadId]: insights.summary }
+          : s.summaryByThread,
+      actionsByThread: { ...s.actionsByThread, [threadId]: insights.actions },
+    }));
   },
 
   categorizeThreads: async (threadIds, customCategories) => {
