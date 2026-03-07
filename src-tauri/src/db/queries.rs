@@ -597,33 +597,72 @@ impl Database {
         account_id: &str,
         mailbox_id: Option<&str>,
         limit: u32,
+        offset: u32,
     ) -> Result<Vec<String>> {
+        let (fts_query, filters) = parse_query(query);
         let limit = limit as i64;
-        let ids = if let Some(mailbox_id) = mailbox_id {
-            let mut stmt = self.conn.prepare(
-                r#"SELECT m.thread_id FROM messages m
-                   JOIN messages_fts fts ON m.rowid = fts.rowid
-                   WHERE fts.messages_fts MATCH ?1 AND m.account_id=?2 AND m.mailbox_id=?3
-                   GROUP BY m.thread_id ORDER BY MAX(rank) LIMIT ?4"#,
-            )?;
-            let rows = stmt.query_map(
-                rusqlite::params![query, account_id, mailbox_id, limit],
-                |row| row.get::<_, Option<String>>(0),
-            )?;
-            rows.filter_map(|r| r.ok().flatten()).collect()
+        let offset = offset as i64;
+
+        let mut sql = "SELECT m.thread_id FROM messages m ".to_string();
+        if !fts_query.is_empty() {
+            sql.push_str("JOIN messages_fts fts ON m.rowid = fts.rowid ");
+        }
+        sql.push_str("WHERE m.account_id = ? ");
+
+        let mut params: Vec<rusqlite::types::Value> = vec![account_id.to_string().into()];
+
+        if let Some(mid) = mailbox_id {
+            sql.push_str("AND m.mailbox_id = ? ");
+            params.push(mid.to_string().into());
+        }
+
+        if !fts_query.is_empty() {
+            sql.push_str("AND fts.messages_fts MATCH ? ");
+            params.push(fts_query.clone().into());
+        }
+
+        if let Some(from) = filters.from {
+            sql.push_str("AND m.\"from\" LIKE ? ");
+            params.push(format!("%{}%", from).into());
+        }
+
+        if let Some(to) = filters.to {
+            sql.push_str("AND m.\"to\" LIKE ? ");
+            params.push(format!("%{}%", to).into());
+        }
+
+        if let Some(unread) = filters.unread {
+            if unread {
+                sql.push_str("AND instr(COALESCE(m.flags, ''), '\\Seen') = 0 ");
+            } else {
+                sql.push_str("AND instr(COALESCE(m.flags, ''), '\\Seen') > 0 ");
+            }
+        }
+
+        if let Some(has_attachment) = filters.has_attachment {
+            sql.push_str("AND m.has_attachments = ? ");
+            params.push((if has_attachment { 1 } else { 0 }).into());
+        }
+
+        sql.push_str("GROUP BY m.thread_id ");
+        
+        if !fts_query.is_empty() {
+            sql.push_str("ORDER BY MAX(rank) LIMIT ? OFFSET ?");
         } else {
-            let mut stmt = self.conn.prepare(
-                r#"SELECT m.thread_id FROM messages m
-                   JOIN messages_fts fts ON m.rowid = fts.rowid
-                   WHERE fts.messages_fts MATCH ?1 AND m.account_id=?2
-                   GROUP BY m.thread_id ORDER BY MAX(rank) LIMIT ?3"#,
-            )?;
-            let rows = stmt.query_map(rusqlite::params![query, account_id, limit], |row| {
-                row.get::<_, Option<String>>(0)
-            })?;
-            rows.filter_map(|r| r.ok().flatten()).collect()
-        };
-        Ok(ids)
+            sql.push_str("ORDER BY MAX(m.date) DESC LIMIT ? OFFSET ?");
+        }
+        
+        params.push(limit.into());
+        params.push(offset.into());
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        println!(">>> FTS SQL: {}", sql);
+        println!(">>> FTS Params: {:?}", params);
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            row.get::<_, Option<String>>(0)
+        })?;
+
+        Ok(rows.filter_map(|r| r.ok().flatten()).collect())
     }
 
     pub fn get_threads_by_ids(
@@ -728,6 +767,7 @@ impl Database {
         query_embedding: &[f32],
         model: &str,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<(String, f32)>> {
         let mut stmt = self.conn.prepare(
             "SELECT e.thread_id, e.embedding
@@ -765,8 +805,10 @@ impl Database {
             tracing::info!("Top semantic match: {} (score: {:.4})", results[0].0, results[0].1);
         }
         
-        results.truncate(limit);
-        Ok(results)
+        // Apply offset and limit manually for now since we sort in memory
+        let start = offset.min(results.len());
+        let end = (offset + limit).min(results.len());
+        Ok(results[start..end].to_vec())
     }
 }
 
@@ -787,6 +829,43 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     dot / (norm_a.sqrt() * norm_b.sqrt())
+}
+
+#[derive(Default)]
+struct SearchFilters {
+    from: Option<String>,
+    to: Option<String>,
+    unread: Option<bool>,
+    has_attachment: Option<bool>,
+}
+
+fn parse_query(query: &str) -> (String, SearchFilters) {
+    let mut fts_parts = Vec::new();
+    let mut filters = SearchFilters::default();
+
+    for part in query.split_whitespace() {
+        if let Some(from) = part.strip_prefix("from:") {
+            filters.from = Some(from.to_string());
+        } else if let Some(to) = part.strip_prefix("to:") {
+            filters.to = Some(to.to_string());
+        } else if let Some(is) = part.strip_prefix("is:") {
+            match is {
+                "unread" => filters.unread = Some(true),
+                "read" => filters.unread = Some(false),
+                _ => fts_parts.push(part),
+            }
+        } else if let Some(has) = part.strip_prefix("has:") {
+            if has == "attachment" {
+                filters.has_attachment = Some(true);
+            } else {
+                fts_parts.push(part);
+            }
+        } else {
+            fts_parts.push(part);
+        }
+    }
+
+    (fts_parts.join(" "), filters)
 }
 
 #[cfg(test)]

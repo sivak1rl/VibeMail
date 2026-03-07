@@ -12,6 +12,34 @@ interface Props {
   loading: boolean;
   onLoadMore?: () => void;
   hasMore?: boolean;
+  query?: string;
+}
+
+function Highlight({ text, query }: { text: string; query?: string }) {
+  if (!query || !query.trim() || !text) return <>{text}</>;
+
+  // Split query into terms, ignoring filters like from:
+  const terms = query
+    .split(/\s+/)
+    .filter((t) => !t.includes(":"))
+    .filter((t) => t.length > 1);
+
+  if (terms.length === 0) return <>{text}</>;
+
+  const regex = new RegExp(`(${terms.join("|")})`, "gi");
+  const parts = text.split(regex);
+
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark key={i} className={styles.mark}>{part}</mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
 }
 
 function TriageDot({ score }: { score: number | null }) {
@@ -58,6 +86,7 @@ export default function InboxList({
   loading,
   onLoadMore,
   hasMore,
+  query,
 }: Props) {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const selectedSet = new Set(selectedThreadIds);
@@ -126,7 +155,9 @@ export default function InboxList({
                     onToggleSelect(thread.id, !isChecked, event.shiftKey);
                   }}
                 />
-                <span className={styles.sender}>{senderDisplay}</span>
+                <span className={styles.sender}>
+                  <Highlight text={senderDisplay} query={query} />
+                </span>
               </div>
               <span className={styles.date}>{formatDate(thread.last_date)}</span>
             </div>
@@ -134,7 +165,7 @@ export default function InboxList({
               <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
                 {thread.is_flagged && <span className={styles.star}>★</span>}
                 <span className={styles.subject}>
-                  {thread.subject ?? "(no subject)"}
+                  <Highlight text={thread.subject ?? "(no subject)"} query={query} />
                 </span>
               </div>
               {thread.unread_count > 0 && (

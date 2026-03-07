@@ -73,6 +73,13 @@
   max-width: 200px;
 }
 
+.mark {
+  background: rgba(241, 196, 15, 0.3);
+  color: #f1c40f;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 .unreadBadge {
   background: var(--color-accent);
   color: #fff;

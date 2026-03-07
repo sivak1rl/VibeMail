@@ -12,7 +12,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [x] Background auto-sync on a timer (configurable, default 15 minutes)
 - [ ] IMAP IDLE push notifications for real-time new mail
 - [ ] Retry logic with exponential backoff on transient failures
-- [ ] Sync multiple mailboxes (Sent, Drafts, Archive, Trash), not just INBOX
+- [x] Sync multiple mailboxes (Sync All button + background progress)
 - [x] Flag sync — mark read/unread, star/flag changes propagated back to server
 - [ ] Detect and handle token revocation gracefully (re-prompt OAuth)
 
@@ -21,10 +21,13 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Swipe actions on thread list (archive, delete, snooze)
 - [x] Unread count badge in sidebar per mailbox
 - [x] Bulk thread selection (checkboxes + shift-select range)
+- [x] Tree-like folder selector (Gmail style nesting)
+- [x] Lightbox email view (expand to full focused view)
+- [x] Two-column Settings UI with navigation hotlinks
 - [ ] "Pull to refresh" gesture on thread list
 - [ ] Empty state illustrations (no mail, no search results)
 - [ ] Loading skeleton improvements during sync
-- [ ] Toast notifications for sync completion, errors, sent mail
+- [x] Background progress indicators (sidebar status + reindex toast)
 - [ ] Responsive layout — collapsible sidebar, mobile-friendly thread view
 - [ ] Thread view: collapse/expand individual messages
 - [ ] Inline image rendering in HTML emails
@@ -40,10 +43,13 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Signature configuration per account
 
 ### Search
-- [ ] Search-as-you-type with debounce
-- [ ] Search filters: from, to, date range, has:attachment, is:unread
-- [ ] Search result highlighting
-- [ ] Recent search history
+- [x] Search-as-you-type with debounce
+- [x] Search filters: from, to, has:attachment, is:unread
+- [x] Search result highlighting
+- [x] Recent search history
+- [x] Semantic Search (AI-powered meaningful search)
+- [x] Global search (search all folders at once)
+- [x] Paginated search results (infinite scroll)
 
 ---
 

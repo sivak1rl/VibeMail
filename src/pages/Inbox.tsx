@@ -104,8 +104,12 @@ export default function Inbox({ onSettings }: Props) {
 
   const handleLoadMore = useCallback(() => {
     if (!activeAccountId) return;
-    loadMoreThreads(activeAccountId, selectedMailboxId);
-  }, [activeAccountId, selectedMailboxId, loadMoreThreads]);
+    if (showSearch) {
+      void useSearchStore.getState().loadMore(activeAccountId, selectedMailboxId);
+    } else {
+      loadMoreThreads(activeAccountId, selectedMailboxId);
+    }
+  }, [activeAccountId, selectedMailboxId, loadMoreThreads, showSearch]);
 
   const handleMailboxSelect = useCallback((mailboxId: string) => {
     selectMailbox(mailboxId);
@@ -427,6 +431,7 @@ export default function Inbox({ onSettings }: Props) {
           loading={loading}
           onLoadMore={handleLoadMore}
           hasMore={hasMore}
+          query={searchQuery}
         />
       </div>
 
