@@ -23,6 +23,7 @@ pub struct SyncAccountRequest {
     pub account_id: String,
     pub mailbox_id: Option<String>,
     pub days: Option<u32>,
+    pub limit: Option<u32>,
 }
 
 #[tauri::command]
@@ -36,6 +37,7 @@ pub async fn fetch_history(
     let account_id = request.account_id.clone();
     let mailbox_id = request.mailbox_id.clone();
     let days = request.days.unwrap_or(30);
+    let limit = request.limit.unwrap_or(100);
 
     {
         let mut mgr: tokio::sync::MutexGuard<'_, SyncManager> = sync_mgr.lock().await;
@@ -79,14 +81,14 @@ pub async fn fetch_history(
                 db.list_mailboxes(&account.id)?
             };
 
-            for mut mailbox in mailboxes {
+            for mailbox in mailboxes {
                 let oldest_date: Option<DateTime<Utc>> = {
                     let db = db_clone.lock().await;
                     db.get_mailbox_oldest_date(&mailbox.id)?
                 };
 
-                // If we have an oldest date, we fetch 'BEFORE' that date.
-                // Otherwise, we fetch the last 'days' from now.
+                println!(">>> HISTORY: Mailbox {} has oldest local date: {:?}", mailbox.name, oldest_date);
+
                 let search_query = if let Some(oldest) = oldest_date {
                     let before_date = oldest.format("%d-%b-%Y").to_string();
                     format!("BEFORE {}", before_date)
@@ -95,6 +97,7 @@ pub async fn fetch_history(
                     format!("SINCE {}", since_date)
                 };
 
+                println!(">>> HISTORY: Search query: {}", search_query);
                 let _ = app_clone.emit("sync-progress", format!("Searching for history: {}…", mailbox.name));
                 
                 let _select = session.select(&mailbox.name).await?;
@@ -102,12 +105,17 @@ pub async fn fetch_history(
                 let mut uids: Vec<u32> = uids_set.into_iter().collect();
                 uids.sort_unstable_by(|a, b| b.cmp(a)); // Newest of the older mail first
                 
+                println!(">>> HISTORY: Found {} candidate UIDs", uids.len());
+                
                 // Limit the number of history items per pull
-                uids.truncate(200);
+                uids.truncate(limit as usize);
                 
                 if !uids.is_empty() {
-                    for chunk in uids.chunks(100) {
+                    let batch_size = limit.min(500); // Caps individual IMAP fetch to 500 for safety
+                    for chunk in uids.chunks(batch_size as usize) {
+
                         let uid_range = format_uid_sequence_set(chunk);
+                        println!(">>> HISTORY: Fetching UID range: {}", uid_range);
                         let _ = app_clone.emit("sync-progress", format!("Fetching {} history items for {}…", uids.len(), mailbox.name));
                         
                         let fetches: Vec<_> = session
@@ -116,6 +124,8 @@ pub async fn fetch_history(
                             .try_collect()
                             .await?;
                         
+                        println!(">>> HISTORY: Parsed {} fetches from server", fetches.len());
+                        
                         let gmail_labels = if account.provider == "gmail" {
                             crate::mail::imap::fetch_gmail_vibemail_labels(&mut session, &uid_range).await?
                         } else {
@@ -123,9 +133,11 @@ pub async fn fetch_history(
                         };
 
                         let batch_results = crate::mail::imap::parse_fetches(&fetches, &account, &mailbox, &gmail_labels);
+                        println!(">>> HISTORY: Parsed {} messages from fetches", batch_results.len());
                         if !batch_results.is_empty() {
                             crate::mail::imap::persist_batch(&batch_results, &account, &mailbox, &db_clone).await?;
                             total_new += batch_results.len();
+                            println!(">>> HISTORY: Persisted {} messages", batch_results.len());
                         }
                     }
                 }
@@ -316,6 +328,8 @@ async fn do_sync(
     search: Arc<Mutex<SearchIndex>>,
     app: AppHandle,
 ) -> anyhow::Result<usize> {
+    use tokio::time::{timeout, Duration};
+
     let account = {
         let db = db.lock().await;
         db.list_accounts()?
@@ -324,7 +338,10 @@ async fn do_sync(
             .ok_or_else(|| anyhow::anyhow!("Account not found"))?
     };
 
-    let mut session = mail_imap::connect_imap(&account).await?;
+    let mut session = match timeout(Duration::from_secs(10), mail_imap::connect_imap(&account)).await {
+        Ok(s) => s?,
+        Err(_) => return Err(anyhow::anyhow!("Connection timeout")),
+    };
 
     let mut mailbox = {
         let db = db.lock().await;
@@ -346,20 +363,35 @@ async fn do_sync(
         }
     };
 
-    let _ = app.emit("sync-progress", "Connecting to IMAP…");
+    let _ = app.emit("sync-progress", format!("Syncing {}…", mailbox.name));
+    println!(">>> SYNC: Starting sync for {}", mailbox.name);
 
-    let messages = mail_imap::sync_mailbox(&mut session, &account, &mut mailbox, db.clone(), {
+    let messages = match timeout(Duration::from_secs(60), mail_imap::sync_mailbox(&mut session, &account, &mut mailbox, db.clone(), {
         let app = app.clone();
         move |status: &str| {
+            println!(">>> SYNC PROGRESS: {}", status);
             let _ = app.emit("sync-progress", status);
         }
-    })
-    .await?;
+    })).await {
+        Ok(res) => match res {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                println!(">>> SYNC ERROR: {}", e);
+                return Err(e.into());
+            }
+        },
+        Err(_) => {
+            println!(">>> SYNC TIMEOUT for {}", mailbox.name);
+            tracing::warn!("Sync timeout for mailbox {}", mailbox.name);
+            return Ok(0);
+        }
+    };
+    
     let count = messages.len();
+    println!(">>> SYNC: Downloaded {} messages for {}", count, mailbox.name);
+    if count > 0 {
+        let _ = app.emit("sync-progress", format!("Indexing {} messages…", count));
 
-    let _ = app.emit("sync-progress", format!("Indexing {} messages…", count));
-
-    {
         let search = search.lock().await;
         for (msg, _) in &messages {
             if let Some(thread_id) = &msg.thread_id {
@@ -407,8 +439,17 @@ pub async fn get_sync_status(
     account_id: String,
     sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
 ) -> Result<bool, String> {
-    let mgr = sync_mgr.lock().await;
-    Ok(mgr.is_syncing(&account_id))
+    let mgr: tokio::sync::MutexGuard<'_, SyncManager> = sync_mgr.lock().await;
+    // Check main sync
+    if mgr.is_syncing(&account_id) { return Ok(true); }
+    // Check history syncs
+    for key in mgr.accounts.keys() {
+        let k: &String = key;
+        if k.contains(&account_id) && mgr.is_syncing(k) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[tauri::command]
@@ -896,9 +937,43 @@ pub async fn get_attachment_data(
 }
 
 #[tauri::command]
+pub async fn get_db_counts(
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<HashMap<String, i64>, String> {
+    let db = db.lock().await;
+    db.get_counts().map_err(|e: anyhow::Error| e.to_string())
+}
+
+#[tauri::command]
 pub async fn delete_all_attachments(db: State<'_, Arc<Mutex<Database>>>) -> Result<(), String> {
     let db = db.lock().await;
     db.delete_all_attachments().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn wipe_local_data(
+    reset_schema: Option<bool>,
+    app: tauri::AppHandle,
+    db: State<'_, Arc<Mutex<Database>>>,
+    search: State<'_, Arc<Mutex<SearchIndex>>>,
+) -> Result<(), String> {
+    let reset = reset_schema.unwrap_or(false);
+    
+    if reset {
+        // Full file wipe is handled by deleting the files on next app start or via explicit deletion here
+        // For simplicity, we drop all tables except accounts
+        let mut db = db.lock().await;
+        db.drop_tables().map_err(|e| e.to_string())?;
+    } else {
+        let db = db.lock().await;
+        db.wipe_data().map_err(|e| e.to_string())?;
+    }
+
+    {
+        let search = search.lock().await;
+        search.clear_all().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

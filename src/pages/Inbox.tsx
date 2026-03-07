@@ -47,7 +47,7 @@ export default function Inbox({ onSettings }: Props) {
   } = useThreadStore();
   const { results: searchResults, query: searchQuery, clear: clearSearch } = useSearchStore();
   const { loadConfig, summarizeThreads, categorizeThreads, batchSummarizing, batchCategorizing } = useAiStore();
-  const { autoLabelNewEmails, customCategories } = usePreferencesStore();
+  const { autoLabelNewEmails, customCategories, autoSyncIntervalMinutes, historyFetchDays, historyFetchLimit } = usePreferencesStore();
 
   const [showSearch, setShowSearch] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -78,9 +78,12 @@ export default function Inbox({ onSettings }: Props) {
           if (isSyncing) {
             void syncAccount(activeAccountId, initialMailboxId);
           } else {
-            await syncAccount(activeAccountId, initialMailboxId);
+            // We NO LONGER trigger a sync here automatically.
+            // Just pull mailboxes to show the folder list.
             await fetchMailboxes(activeAccountId, true);
           }
+
+
 
           // Check background reindex
           const isReindexing = await invoke<boolean>("get_reindex_status", { accountId: activeAccountId });
@@ -109,12 +112,15 @@ export default function Inbox({ onSettings }: Props) {
 
   const handleSync = useCallback(async () => {
     if (!activeAccountId) return;
-    await syncAccount(activeAccountId, selectedMailboxId);
     await fetchMailboxes(activeAccountId, true);
-  }, [activeAccountId, fetchMailboxes, selectedMailboxId, syncAccount]);
+    const mailboxId = useMailboxStore.getState().selectedMailboxId;
+    await syncAccount(activeAccountId, mailboxId);
+    await fetchMailboxes(activeAccountId, true);
+  }, [activeAccountId, fetchMailboxes, syncAccount]);
 
   const handleSyncAll = useCallback(async () => {
     if (!activeAccountId) return;
+    await fetchMailboxes(activeAccountId, true);
     await syncAccount(activeAccountId, null); // null means all folders
     await fetchMailboxes(activeAccountId, true);
     // Refresh current view
@@ -123,8 +129,8 @@ export default function Inbox({ onSettings }: Props) {
 
   const handleFetchHistory = useCallback(async () => {
     if (!activeAccountId || !selectedMailboxId) return;
-    await fetchHistory(activeAccountId, selectedMailboxId);
-  }, [activeAccountId, selectedMailboxId, fetchHistory]);
+    await fetchHistory(activeAccountId, selectedMailboxId, historyFetchDays, historyFetchLimit);
+  }, [activeAccountId, selectedMailboxId, fetchHistory, historyFetchDays, historyFetchLimit]);
 
   const handleLoadMore = useCallback(() => {
     if (!activeAccountId) return;
@@ -199,7 +205,7 @@ export default function Inbox({ onSettings }: Props) {
     if (candidates.length === 0) return;
 
     void (async () => {
-      const results = await categorizeThreads(candidates, customCategories);
+      const results = await categorizeThreads(candidates, customCategories, false);
       const labelsByThread = Object.fromEntries(
         results.map((result) => [result.thread_id, result.label]),
       );
@@ -261,7 +267,7 @@ export default function Inbox({ onSettings }: Props) {
 
   const handleCategorizeSelected = useCallback(async () => {
     if (selectedThreadIds.length === 0) return;
-    const results = await categorizeThreads(selectedThreadIds, customCategories);
+    const results = await categorizeThreads(selectedThreadIds, customCategories, true);
     const labelsByThread = Object.fromEntries(
       results.map((result) => [result.thread_id, result.label]),
     );

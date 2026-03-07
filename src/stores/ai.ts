@@ -61,6 +61,7 @@ interface AiState {
   categorizeThreads: (
     threadIds: string[],
     customCategories?: CustomCategory[],
+    force?: boolean,
   ) => Promise<CategorizeThreadResult[]>;
   draftReply: (threadId: string) => Promise<string>;
   extractActions: (threadId: string) => Promise<ExtractedAction[]>;
@@ -159,7 +160,7 @@ export const useAiStore = create<AiState>((set, get) => ({
     }));
   },
 
-  categorizeThreads: async (threadIds, customCategories) => {
+  categorizeThreads: async (threadIds, customCategories, force = false) => {
     const ids = [...new Set(threadIds)].filter(Boolean);
     if (ids.length === 0) return [];
     set({ batchCategorizing: true });
@@ -168,6 +169,7 @@ export const useAiStore = create<AiState>((set, get) => ({
         request: {
           thread_ids: ids,
           custom_categories: customCategories ?? [],
+          force,
         },
       });
     } finally {

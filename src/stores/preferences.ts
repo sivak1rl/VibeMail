@@ -3,6 +3,8 @@ import { create } from "zustand";
 const STORAGE_KEY = "vibemail.preferences";
 const DEFAULT_AUTO_SYNC_MINUTES = 15;
 const DEFAULT_AUTO_LABEL_NEW_EMAILS = false;
+const DEFAULT_HISTORY_FETCH_DAYS = 30;
+const DEFAULT_HISTORY_FETCH_LIMIT = 100;
 
 export interface CustomCategoryPreference {
   name: string;
@@ -12,15 +14,21 @@ export interface CustomCategoryPreference {
 interface PreferencesState {
   autoSyncIntervalMinutes: number;
   autoLabelNewEmails: boolean;
+  historyFetchDays: number;
+  historyFetchLimit: number;
   customCategories: CustomCategoryPreference[];
   setAutoSyncIntervalMinutes: (minutes: number) => void;
   setAutoLabelNewEmails: (enabled: boolean) => void;
+  setHistoryFetchDays: (days: number) => void;
+  setHistoryFetchLimit: (limit: number) => void;
   setCustomCategories: (categories: CustomCategoryPreference[]) => void;
 }
 
 interface StoredPreferences {
   autoSyncIntervalMinutes?: number;
   autoLabelNewEmails?: boolean;
+  historyFetchDays?: number;
+  historyFetchLimit?: number;
   customCategories?: CustomCategoryPreference[];
 }
 
@@ -50,6 +58,24 @@ function loadAutoLabelNewEmails(): boolean {
     return DEFAULT_AUTO_LABEL_NEW_EMAILS;
   }
   return parsed.autoLabelNewEmails;
+}
+
+function loadHistoryFetchDays(): number {
+  const parsed = loadPreferences();
+  const value = parsed.historyFetchDays;
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return DEFAULT_HISTORY_FETCH_DAYS;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function loadHistoryFetchLimit(): number {
+  const parsed = loadPreferences();
+  const value = parsed.historyFetchLimit;
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return DEFAULT_HISTORY_FETCH_LIMIT;
+  }
+  return Math.max(1, Math.floor(value));
 }
 
 function loadCustomCategories(): CustomCategoryPreference[] {
@@ -88,6 +114,8 @@ function persistPreferences(next: StoredPreferences): void {
 export const usePreferencesStore = create<PreferencesState>((set) => ({
   autoSyncIntervalMinutes: loadAutoSyncMinutes(),
   autoLabelNewEmails: loadAutoLabelNewEmails(),
+  historyFetchDays: loadHistoryFetchDays(),
+  historyFetchLimit: loadHistoryFetchLimit(),
   customCategories: loadCustomCategories(),
   setAutoSyncIntervalMinutes: (minutes) => {
     const normalized = Number.isFinite(minutes)
@@ -99,6 +127,20 @@ export const usePreferencesStore = create<PreferencesState>((set) => ({
   setAutoLabelNewEmails: (enabled) => {
     persistPreferences({ autoLabelNewEmails: enabled });
     set({ autoLabelNewEmails: enabled });
+  },
+  setHistoryFetchDays: (days) => {
+    const normalized = Number.isFinite(days)
+      ? Math.max(1, Math.floor(days))
+      : DEFAULT_HISTORY_FETCH_DAYS;
+    persistPreferences({ historyFetchDays: normalized });
+    set({ historyFetchDays: normalized });
+  },
+  setHistoryFetchLimit: (limit) => {
+    const normalized = Number.isFinite(limit)
+      ? Math.max(1, Math.floor(limit))
+      : DEFAULT_HISTORY_FETCH_LIMIT;
+    persistPreferences({ historyFetchLimit: normalized });
+    set({ historyFetchLimit: normalized });
   },
   setCustomCategories: (categories) => {
     const normalized = categories

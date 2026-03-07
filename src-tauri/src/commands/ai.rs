@@ -36,6 +36,7 @@ pub struct TriageResult {
 pub struct CategorizeThreadsRequest {
     pub thread_ids: Vec<String>,
     pub custom_categories: Option<Vec<CustomCategoryInput>>,
+    pub force: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -277,6 +278,7 @@ pub async fn categorize_threads(
     db: State<'_, Arc<Mutex<Database>>>,
     router: State<'_, Arc<AiRouter>>,
 ) -> Result<Vec<CategorizeThreadResult>, String> {
+    let force = request.force.unwrap_or(false);
     let accounts_by_id = {
         let db = db.lock().await;
         db.list_accounts()
@@ -305,6 +307,22 @@ pub async fn categorize_threads(
 
     let mut planned_updates = Vec::with_capacity(thread_ids.len());
     for thread_id in thread_ids {
+        // Check existing labels to see if we should skip
+        let existing_labels = {
+            let db = db.lock().await;
+            db.get_threads_by_ids(std::slice::from_ref(&thread_id), None)
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .next()
+                .map(|t| t.labels)
+                .unwrap_or_default()
+        };
+
+        let has_existing = existing_labels.iter().any(|l| !l.is_empty());
+        if has_existing && !force {
+            continue;
+        }
+
         let messages = {
             let db = db.lock().await;
             db.get_thread_messages(&thread_id)
@@ -367,6 +385,7 @@ pub async fn categorize_threads(
                 updates,
                 &allowed_labels,
                 db.inner().clone(),
+                force,
             )
             .await?;
         }
@@ -488,6 +507,7 @@ async fn sync_gmail_category_labels_for_account(
     updates: &[PlannedCategoryUpdate],
     allowed_labels: &[String],
     db: Arc<Mutex<Database>>,
+    force: bool,
 ) -> Result<(), String> {
     if updates.is_empty() {
         return Ok(());
@@ -551,14 +571,16 @@ async fn sync_gmail_category_labels_for_account(
             .map_err(|_| "IMAP select timed out".to_string())?
             .map_err(|e| e.to_string())?;
 
-        let remove_uid_list = remove_uids.into_iter().collect::<Vec<_>>();
-        for chunk in remove_uid_list.chunks(250) {
-            run_uid_store(
-                &mut session,
-                chunk,
-                &format!("-X-GM-LABELS.SILENT {}", remove_arg),
-            )
-            .await?;
+        if force {
+            let remove_uid_list = remove_uids.into_iter().collect::<Vec<_>>();
+            for chunk in remove_uid_list.chunks(250) {
+                run_uid_store(
+                    &mut session,
+                    chunk,
+                    &format!("-X-GM-LABELS.SILENT {}", remove_arg),
+                )
+                .await?;
+            }
         }
 
         for ((target_mailbox_id, label), add_uids) in &add_targets {

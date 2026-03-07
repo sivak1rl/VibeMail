@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useAiStore, type AiConfig } from "../stores/ai";
 import { useAccountStore } from "../stores/accounts";
 import {
@@ -9,6 +10,7 @@ import styles from "./Settings.module.css";
 
 interface Props {
   onBack: () => void;
+  onReset: () => void;
 }
 
 const PROVIDERS = [
@@ -16,7 +18,7 @@ const PROVIDERS = [
   { value: "openai_compat", label: "BYOK: OpenAI-compatible (Claude, OpenAI, Mistral, Groq…)" },
 ];
 
-export default function Settings({ onBack }: Props) {
+export default function Settings({ onBack, onReset }: Props) {
   const { config, loadConfig, saveConfig } = useAiStore();
   const { accounts, removeAccount } = useAccountStore();
   const {
@@ -24,10 +26,15 @@ export default function Settings({ onBack }: Props) {
     setAutoSyncIntervalMinutes,
     autoLabelNewEmails,
     setAutoLabelNewEmails,
+    historyFetchDays,
+    setHistoryFetchDays,
+    historyFetchLimit,
+    setHistoryFetchLimit,
     customCategories,
     setCustomCategories,
   } = usePreferencesStore();
 
+  const [dbCounts, setDbCounts] = useState<Record<string, number>>({});
   const [form, setForm] = useState<AiConfig>({
     provider: "ollama",
     base_url: "http://localhost:11434",
@@ -39,13 +46,20 @@ export default function Settings({ onBack }: Props) {
     privacy_mode: false,
     enabled: true,
   });
-  const [apiKey, setApiKey] = useState("");
-  const [saved, setSaved] = useState(false);
-  const [customDraft, setCustomDraft] = useState<CustomCategoryPreference[]>([]);
 
   useEffect(() => {
     loadConfig();
+    const fetchCounts = async () => {
+      try {
+        const counts = await invoke<Record<string, number>>("get_db_counts");
+        setDbCounts(counts);
+      } catch {}
+    };
+    void fetchCounts();
   }, [loadConfig]);
+  const [apiKey, setApiKey] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [customDraft, setCustomDraft] = useState<CustomCategoryPreference[]>([]);
 
   useEffect(() => {
     if (config) setForm(config);
@@ -81,6 +95,27 @@ export default function Settings({ onBack }: Props) {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const handleWipeData = async () => {
+    if (!window.confirm("Are you SURE you want to wipe all local email data? This will remove all emails and AI embeddings. Your account credentials will be kept, but automatic sync will be disabled.")) {
+      return;
+    }
+    
+    const fullFileWipe = window.confirm("Would you also like to reset the database schema? (Recommended if you are seeing 'ON CONFLICT' errors)");
+
+    try {
+      // 1. Disable auto-sync
+      setAutoSyncIntervalMinutes(0);
+      
+      // 2. Wipe data (backend now preserves accounts)
+      await invoke("wipe_local_data", { resetSchema: fullFileWipe });
+      
+      alert("Local email data has been cleared. Your account will not be removed but automatic sync will be disabled for this email account.");
+      onReset();
+    } catch (e) {
+      alert("Failed to wipe data: " + e);
+    }
+  };
+
   return (
     <div className={styles.page}>
       <div className={styles.header}>
@@ -95,6 +130,7 @@ export default function Settings({ onBack }: Props) {
           <button className={styles.navLink} onClick={() => scrollTo("privacy")}>Privacy</button>
           <button className={styles.navLink} onClick={() => scrollTo("sync")}>Sync</button>
           <button className={styles.navLink} onClick={() => scrollTo("categories")}>Custom Categories</button>
+          <button className={styles.navLink} onClick={() => scrollTo("danger")}>Danger Zone</button>
 
           <div style={{ flex: 1 }} />
           <button className={styles.saveBtn} onClick={handleSave}>
@@ -226,6 +262,47 @@ export default function Settings({ onBack }: Props) {
               />
               Automatically apply category labels after sync (new unread threads)
             </label>
+
+            <label className={styles.label} style={{ marginTop: "16px" }}>
+              History fetch duration (days)
+              <input
+                className={styles.input}
+                type="number"
+                min={1}
+                step={1}
+                value={historyFetchDays}
+                onChange={(e) => setHistoryFetchDays(Number(e.target.value))}
+              />
+            </label>
+            <p className={styles.muted}>How many days of older mail to fetch when clicking "Load older emails".</p>
+
+            <label className={styles.label} style={{ marginTop: "16px" }}>
+              Max emails to download per history fetch
+              <input
+                className={styles.input}
+                type="number"
+                min={1}
+                step={50}
+                value={historyFetchLimit}
+                onChange={(e) => setHistoryFetchLimit(Number(e.target.value))}
+              />
+            </label>
+            <p className={styles.muted}>Limit the number of older messages downloaded in one go.</p>
+
+            <div className={styles.statsGrid}>
+              <div className={styles.statItem}>
+                <span className={styles.statValue}>{dbCounts.threads || 0}</span>
+                <span className={styles.statLabel}>Threads</span>
+              </div>
+              <div className={styles.statItem}>
+                <span className={styles.statValue}>{dbCounts.messages || 0}</span>
+                <span className={styles.statLabel}>Messages</span>
+              </div>
+              <div className={styles.statItem}>
+                <span className={styles.statValue}>{dbCounts.attachments || 0}</span>
+                <span className={styles.statLabel}>Attachments</span>
+              </div>
+            </div>
           </section>
 
           <section id="categories" className={styles.section}>
@@ -292,6 +369,21 @@ export default function Settings({ onBack }: Props) {
             >
               Add Custom Category
             </button>
+          </section>
+
+          {/* Danger Zone */}
+          <section id="danger" className={styles.section}>
+            <h2 className={`${styles.sectionTitle} ${styles.dangerTitle}`}>Danger Zone</h2>
+            <div className={styles.dangerCard}>
+              <p className={styles.dangerText}>
+                Wiping local data will permanently delete all email content, metadata, 
+                and AI search indices from this machine. Your account login will be preserved,
+                but automatic syncing will be disabled.
+              </p>
+              <button className={styles.wipeBtn} onClick={handleWipeData}>
+                Wipe All Local Data
+              </button>
+            </div>
           </section>
         </div>
       </div>

@@ -85,8 +85,15 @@ export default function App() {
           <Inbox onSettings={() => setPage("settings")} />
         )}
         {page === "settings" && (
-          <Settings onBack={() => setPage("inbox")} />
+          <Settings 
+            onBack={() => setPage("inbox")} 
+            onReset={async () => {
+              await fetchAccounts();
+              setPage("inbox");
+            }}
+          />
         )}
+
       </div>
     </ErrorBoundary>
   );

@@ -69,7 +69,7 @@ interface ThreadStore {
   setThreadsRead: (threadIds: string[], read: boolean) => Promise<void>;
   setThreadsFlagged: (threadIds: string[], flagged: boolean) => Promise<void>;
   archiveThreads: (threadIds: string[]) => Promise<void>;
-  fetchHistory: (accountId: string, mailboxId: string | null, days?: number) => Promise<void>;
+  fetchHistory: (accountId: string, mailboxId: string | null, days?: number, limit?: number) => Promise<void>;
   applyThreadLabels: (
     labelsByThread: Record<string, string>,
     knownCategoryLabels?: string[],
@@ -179,66 +179,10 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
         if (!isSyncing) {
           if (pollTimer) clearInterval(pollTimer);
           set({ syncing: false, syncProgress: null });
-          // Final refresh
-          const PAGE = 50;
-          const focusOnly = get().focusMode;
-          if (mailboxId) {
-            const threads = await invoke<Thread[]>("list_threads", {
-              request: {
-                account_id: accountId,
-                mailbox_id: mailboxId,
-                limit: PAGE,
-                offset: 0,
-                focus_only: focusOnly,
-              },
-            });
-            set({ threads, hasMore: threads.length >= PAGE });
-          }
-        }
-      };
-
-      const pollTimer = setInterval(() => {
-        void checkStatus();
-      }, 2000);
-
-      // We still return the promise, but it "resolves" after starting
-      return { account_id: accountId, mailbox_id: mailboxId, new_messages: 0, error: null };
-    } catch (e) {
-      const error = String(e);
-      set({ syncing: false, syncError: error, syncProgress: null });
-      throw e;
-    } finally {
-      // We don't unlisten immediately because sync is in background.
-      // But we can't keep unlisten forever easily in this pattern.
-      // For now, let's keep it until it's done.
-    }
-  },
-
-  fetchHistory: async (accountId, mailboxId, days = 30) => {
-    set({ syncing: true, syncError: null, syncProgress: "Preparing history fetch…" });
-    let unlisten: UnlistenFn | null = null;
-
-    try {
-      unlisten = await listen<string>("sync-progress", (event) => {
-        set({ syncProgress: event.payload });
-      });
-
-      await invoke<SyncResult>("fetch_history", {
-        request: {
-          account_id: accountId,
-          mailbox_id: mailboxId,
-          days,
-        },
-      });
-
-      // Poll for completion (similar to syncAccount)
-      const checkStatus = async () => {
-        const isSyncing = await invoke<boolean>("get_sync_status", { accountId });
-        if (!isSyncing) {
-          if (pollTimer) clearInterval(pollTimer);
-          set({ syncing: false, syncProgress: null });
-          // Final refresh of current view
-          const PAGE = 50;
+          
+          // Refresh the view
+          const currentCount = get().threads.length;
+          const PAGE = Math.max(50, currentCount);
           const focusOnly = get().focusMode;
           const threads = await invoke<Thread[]>("list_threads", {
             request: {
@@ -255,7 +199,67 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
 
       const pollTimer = setInterval(() => {
         void checkStatus();
-      }, 2000);
+      }, 500);
+
+      // We still return the promise, but it "resolves" after starting
+      return { account_id: accountId, mailbox_id: mailboxId, new_messages: 0, error: null };
+    } catch (e) {
+      const error = String(e);
+      set({ syncing: false, syncError: error, syncProgress: null });
+      throw e;
+    } finally {
+      // We don't unlisten immediately because sync is in background.
+      // But we can't keep unlisten forever easily in this pattern.
+      // For now, let's keep it until it's done.
+    }
+  },
+
+  fetchHistory: async (accountId, mailboxId, days = 30, limit = 100) => {
+    set({ syncing: true, syncError: null, syncProgress: "Preparing history fetch…" });
+    let unlisten: UnlistenFn | null = null;
+
+    try {
+      unlisten = await listen<string>("sync-progress", (event) => {
+        set({ syncProgress: event.payload });
+      });
+
+      await invoke<SyncResult>("fetch_history", {
+        request: {
+          account_id: accountId,
+          mailbox_id: mailboxId,
+          days,
+          limit,
+        },
+      });
+
+      // Poll for completion (similar to syncAccount)
+      const checkStatus = async () => {
+        const isSyncing = await invoke<boolean>("get_sync_status", { accountId });
+        if (!isSyncing) {
+          if (pollTimer) clearInterval(pollTimer);
+          set({ syncing: false, syncProgress: null });
+          
+          // Refresh the view and expand by the requested limit to show the new history
+          const currentCount = get().threads.length;
+          const PAGE = currentCount + limit;
+          const focusOnly = get().focusMode;
+          
+          const threads = await invoke<Thread[]>("list_threads", {
+            request: {
+              account_id: accountId,
+              mailbox_id: mailboxId,
+              limit: PAGE,
+              offset: 0,
+              focus_only: focusOnly,
+            },
+          });
+          set({ threads, hasMore: threads.length >= PAGE });
+        }
+      };
+
+      const pollTimer = setInterval(() => {
+        void checkStatus();
+      }, 500);
     } catch (e) {
       set({ syncing: false, syncError: String(e), syncProgress: null });
       throw e;

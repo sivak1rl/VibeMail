@@ -2,6 +2,7 @@ use crate::db::{models::*, Database};
 use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use serde_json;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct MailboxStats {
@@ -23,7 +24,10 @@ impl Database {
         self.conn.execute(
             r#"INSERT INTO accounts (id, name, email, provider, imap_host, imap_port, smtp_host, smtp_port)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-               ON CONFLICT(email) DO UPDATE SET name=excluded.name, provider=excluded.provider,
+               ON CONFLICT(id) DO UPDATE SET 
+               name=excluded.name, 
+               email=excluded.email,
+               provider=excluded.provider,
                imap_host=excluded.imap_host, imap_port=excluded.imap_port,
                smtp_host=excluded.smtp_host, smtp_port=excluded.smtp_port"#,
             rusqlite::params![
@@ -66,8 +70,11 @@ impl Database {
         self.conn.execute(
             r#"INSERT INTO mailboxes (id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-               ON CONFLICT(account_id, name) DO UPDATE SET
-               flags=excluded.flags, uid_validity=excluded.uid_validity, uid_next=excluded.uid_next,
+               ON CONFLICT(id) DO UPDATE SET
+               flags=excluded.flags, 
+               delimiter=excluded.delimiter,
+               uid_validity=excluded.uid_validity, 
+               uid_next=excluded.uid_next,
                last_synced_at=excluded.last_synced_at"#,
             rusqlite::params![
                 mailbox.id, mailbox.account_id, mailbox.name, mailbox.delimiter,
@@ -207,7 +214,7 @@ impl Database {
                 date, body_text, body_html, references_ids, in_reply_to, flags, has_attachments,
                 triage_score, ai_summary)
                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
-               ON CONFLICT(account_id, mailbox_id, uid) DO UPDATE SET
+               ON CONFLICT(id) DO UPDATE SET
                message_id=excluded.message_id, thread_id=excluded.thread_id,
                subject=excluded.subject, "from"=excluded."from", "to"=excluded."to",
                cc=excluded.cc, date=excluded.date, body_text=excluded.body_text,
@@ -248,16 +255,16 @@ impl Database {
                (id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, has_attachments, last_date, last_from, triage_score, labels)
                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
                ON CONFLICT(id) DO UPDATE SET
-               subject=excluded.subject, participant_ids=excluded.participant_ids,
-               message_count=excluded.message_count, unread_count=excluded.unread_count,
+               subject=excluded.subject,
+               participant_ids=excluded.participant_ids,
+               message_count=excluded.message_count,
+               unread_count=excluded.unread_count,
                is_flagged=excluded.is_flagged,
                has_attachments=excluded.has_attachments,
-               last_date=excluded.last_date, last_from=excluded.last_from,
-               triage_score=COALESCE(excluded.triage_score, threads.triage_score),
-               labels=CASE
-                 WHEN excluded.labels = '[]' THEN COALESCE(threads.labels, excluded.labels)
-                 ELSE excluded.labels
-               END,
+               last_date=excluded.last_date,
+               last_from=excluded.last_from,
+               triage_score=excluded.triage_score,
+               labels=excluded.labels,
                updated_at=unixepoch()"#,
             rusqlite::params![
                 thread.id, thread.account_id, thread.subject,
@@ -832,8 +839,44 @@ impl Database {
         Ok(())
     }
 
+    pub fn get_counts(&self) -> Result<HashMap<String, i64>> {
+        let mut counts = HashMap::new();
+        counts.insert("accounts".to_string(), self.conn.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?);
+        counts.insert("mailboxes".to_string(), self.conn.query_row("SELECT count(*) FROM mailboxes", [], |r| r.get(0))?);
+        counts.insert("threads".to_string(), self.conn.query_row("SELECT count(*) FROM threads", [], |r| r.get(0))?);
+        counts.insert("messages".to_string(), self.conn.query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?);
+        counts.insert("attachments".to_string(), self.conn.query_row("SELECT count(*) FROM attachments", [], |r| r.get(0))?);
+        Ok(counts)
+    }
+
     pub fn delete_all_attachments(&self) -> Result<()> {
         self.conn.execute("DELETE FROM attachments", [])?;
+        Ok(())
+    }
+
+    pub fn wipe_data(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM attachments", [])?;
+        self.conn.execute("DELETE FROM thread_actions", [])?;
+        self.conn.execute("DELETE FROM thread_embeddings", [])?;
+        self.conn.execute("DELETE FROM messages", [])?;
+        self.conn.execute("DELETE FROM threads", [])?;
+        self.conn.execute("DELETE FROM mailboxes", [])?;
+        // Preservation of accounts table as requested
+        Ok(())
+    }
+
+    pub fn drop_tables(&mut self) -> Result<()> {
+        // We drop in reverse order of dependencies
+        self.conn.execute("DROP TABLE IF EXISTS attachments", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS messages_fts", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS thread_embeddings", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS thread_actions", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS messages", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS threads", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS mailboxes", [])?;
+        
+        // Re-run migrations to recreate them
+        crate::db::schema::run_migrations(&mut self.conn)?;
         Ok(())
     }
 

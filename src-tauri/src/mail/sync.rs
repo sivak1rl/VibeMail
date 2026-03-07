@@ -9,7 +9,7 @@ pub struct SyncState {
 }
 
 pub struct SyncManager {
-    accounts: HashMap<String, SyncState>,
+    pub accounts: HashMap<String, SyncState>,
 }
 
 impl SyncManager {

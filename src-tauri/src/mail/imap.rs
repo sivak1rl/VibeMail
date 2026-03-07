@@ -2,12 +2,12 @@ use crate::auth::{keychain, oauth};
 use crate::db::{models::*, Database};
 use crate::mail::{parser, threading};
 use anyhow::{anyhow, Result};
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{Duration as ChronoDuration, Utc};
 use async_imap::imap_proto::types::{AttributeValue, Response, Status};
 use async_imap::{types::Flag, Client};
 use async_native_tls::TlsConnector;
 use futures::TryStreamExt;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -180,29 +180,18 @@ pub async fn sync_mailbox(
     let mut batch_idx: usize = 0;
 
     if is_fresh {
-        // First sync: only grab messages from the last 30 days, up to INITIAL_SYNC_LIMIT
-        let since_date = (Utc::now() - ChronoDuration::days(30)).format("%d-%b-%Y").to_string();
-        let search_query = format!("SINCE {}", since_date);
-        
-        on_progress("Searching for recent mail…");
-        let uids_set = session.uid_search(&search_query).await?;
-        let mut uids: Vec<u32> = uids_set.into_iter().collect();
-        uids.sort_unstable_by(|a, b| b.cmp(a)); // Newest first
-        uids.truncate(INITIAL_SYNC_LIMIT as usize);
+        // First sync: fetch newest-first (descending) in graduated batches
+        let mut cursor = server_uid_next.saturating_sub(1); // highest possible UID
+        let stop_at = server_uid_next.saturating_sub(INITIAL_SYNC_LIMIT).max(1);
 
-        if uids.is_empty() {
-            mailbox.uid_next = select.uid_next;
-            mailbox.last_synced_at = Some(Utc::now());
-            let db = db.lock().await;
-            db.upsert_mailbox(mailbox)?;
-            return Ok(vec![]);
-        }
+        while cursor >= stop_at && cursor >= 1 {
+            let batch_size = BATCH_SIZES[batch_idx.min(BATCH_SIZES.len() - 1)];
+            batch_idx += 1;
+            let batch_start = cursor.saturating_sub(batch_size - 1).max(stop_at);
+            let uid_range = format!("{}:{}", batch_start, cursor);
 
-        for chunk in uids.chunks(BATCH_SIZES[BATCH_SIZES.len()-1] as usize) {
-            let uid_range = format_uid_sequence_set(chunk);
-            
             on_progress(&format!(
-                "Fetching recent mail… {} so far",
+                "Fetching newest mail… {} so far",
                 all_results.len()
             ));
 
@@ -211,19 +200,25 @@ pub async fn sync_mailbox(
                 .await?
                 .try_collect()
                 .await?;
-            
             let gmail_labels = if account.provider == "gmail" {
                 fetch_gmail_vibemail_labels(session, &uid_range).await?
             } else {
                 HashMap::new()
             };
 
+            cursor = batch_start.saturating_sub(1);
+            // Process this batch
             let batch_results = parse_fetches(&fetches, account, mailbox, &gmail_labels);
             if !batch_results.is_empty() {
                 persist_batch(&batch_results, account, mailbox, &db).await?;
             }
             all_results.extend(batch_results);
+
+            if cursor < 1 {
+                break;
+            }
         }
+        mailbox.last_synced_at = Some(Utc::now());
     } else {
         // Incremental sync: fetch messages received SINCE the last sync time
         // This handles UID changes and avoids gaps if the server moves UIDs
@@ -271,6 +266,7 @@ pub async fn sync_mailbox(
     }
 
     mailbox.uid_next = select.uid_next;
+    mailbox.last_synced_at = Some(Utc::now());
     {
         let db = db.lock().await;
         db.upsert_mailbox(mailbox)?;
@@ -406,26 +402,74 @@ pub async fn persist_batch(
     mailbox: &Mailbox,
     db: &Arc<Mutex<Database>>,
 ) -> Result<()> {
-    let messages: Vec<Message> = batch.iter().map(|(m, _)| m.clone()).collect();
-    let threads = threading::build_threads(messages, &account.id);
-    let db = db.lock().await;
-    db.upsert_mailbox(mailbox)?;
-    for thread in &threads {
-        db.upsert_thread(thread)?;
+    // 1. Collect all messages for threading: those in the batch + those already in the DB for affected threads
+    let mut all_thread_messages = Vec::new();
+    
+    // Start with all messages in the current batch
+    for (msg, _) in batch {
+        all_thread_messages.push(msg.clone());
+    }
+
+    // 2. Find which threads these messages belong to (if any already exist in DB)
+    let mut thread_ids: BTreeSet<String> = BTreeSet::new();
+    for (msg, _) in batch {
+        if let Some(tid) = &msg.thread_id {
+            thread_ids.insert(tid.clone());
+        }
+    }
+
+    // 3. Fetch existing history for these threads to ensure accurate counts/merging
+    if !thread_ids.is_empty() {
+        let db_lock = db.lock().await;
+        for tid in thread_ids {
+            let existing = db_lock.get_thread_messages(&tid)?;
+            for ext_msg in existing {
+                // Don't add if we already have it in our batch (batch is newer)
+                if !all_thread_messages.iter().any(|m| m.id == ext_msg.id) {
+                    all_thread_messages.push(ext_msg);
+                }
+            }
+        }
+    }
+
+    // 4. Build updated thread objects
+    let updated_threads = threading::build_threads(all_thread_messages, &account.id);
+
+    // 5. Persist everything
+    let db_lock = db.lock().await;
+    db_lock.upsert_mailbox(mailbox)?;
+    
+    let mut thread_count = 0;
+    let mut msg_count = 0;
+
+    for thread in &updated_threads {
+        if let Err(e) = db_lock.upsert_thread(thread) {
+            println!(">>> DB ERROR: upsert_thread failed: {}", e);
+            return Err(e.into());
+        }
+        thread_count += 1;
         if let Some(msgs) = &thread.messages {
             for msg in msgs {
-                db.upsert_message(msg)?;
-                // Clear old attachments for this message before re-adding
-                db.delete_message_attachments(&msg.id)?;
-                // Find matching attachments in batch
+                if let Err(e) = db_lock.upsert_message(msg) {
+                    println!(">>> DB ERROR: upsert_message failed: {}", e);
+                    return Err(e.into());
+                }
+                msg_count += 1;
+                // Only update attachments for messages that were in our current batch
                 if let Some((_, atts)) = batch.iter().find(|(m, _)| m.id == msg.id) {
+                    db_lock.delete_message_attachments(&msg.id)?;
                     for att in atts {
-                        db.upsert_attachment(att)?;
+                        if let Err(e) = db_lock.upsert_attachment(att) {
+                            println!(">>> DB ERROR: upsert_attachment failed: {}", e);
+                            return Err(e.into());
+                        }
                     }
                 }
             }
         }
     }
+    println!(">>> DB: Successfully persisted {} threads and {} messages", thread_count, msg_count);
+    info!("Persisted {} threads and {} messages", thread_count, msg_count);
     Ok(())
 }
 
