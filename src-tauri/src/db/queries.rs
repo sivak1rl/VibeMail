@@ -660,6 +660,10 @@ impl Database {
                 placeholders
             )
         };
+
+        println!(">>> HYDRATE SQL: {}", sql);
+        println!(">>> HYDRATE IDs: {:?}", ids);
+
         let map_thread = |row: &rusqlite::Row<'_>| {
             Ok(Thread {
                 id: row.get(0)?,

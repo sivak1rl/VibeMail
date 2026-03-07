@@ -70,8 +70,8 @@ pub async fn search_semantic(
 
     let thread_ids: Vec<String> = matches.into_iter().map(|(id, _)| id).collect();
 
-    // 3. Hydrate threads
-    let threads = db.get_threads_by_ids(&thread_ids, request.mailbox_id.as_deref())
+    // 3. Hydrate threads (Global search — ignore mailbox filter for semantic search)
+    let threads = db.get_threads_by_ids(&thread_ids, None)
         .map_err(|e| e.to_string())?;
     
     tracing::info!("Hydrated {} threads from {} IDs", threads.len(), thread_ids.len());
