@@ -72,6 +72,7 @@ pub fn run() {
             commands::accounts::complete_oauth,
             commands::imap::sync_account,
             commands::imap::fetch_history,
+            commands::imap::fetch_entire_mailbox,
             commands::imap::list_mailboxes,
             commands::imap::list_threads,
             commands::imap::get_thread,

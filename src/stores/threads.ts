@@ -52,6 +52,12 @@ interface SyncResult {
   error: string | null;
 }
 
+export interface SyncProgress {
+  message: string;
+  current: number | null;
+  total: number | null;
+}
+
 interface ThreadStore {
   threads: Thread[];
   selectedThreadId: string | null;
@@ -59,7 +65,7 @@ interface ThreadStore {
   loading: boolean;
   syncing: boolean;
   syncError: string | null;
-  syncProgress: string | null;
+  syncProgress: SyncProgress | null;
   focusMode: boolean;
   hasMore: boolean;
   fetchThreads: (accountId: string, mailboxId?: string | null, focusOnly?: boolean) => Promise<void>;
@@ -70,6 +76,7 @@ interface ThreadStore {
   setThreadsFlagged: (threadIds: string[], flagged: boolean) => Promise<void>;
   archiveThreads: (threadIds: string[]) => Promise<void>;
   fetchHistory: (accountId: string, mailboxId: string | null, days?: number, limit?: number) => Promise<void>;
+  fetchEntireMailbox: (accountId: string, mailboxId: string) => Promise<void>;
   applyThreadLabels: (
     labelsByThread: Record<string, string>,
     knownCategoryLabels?: string[],
@@ -157,11 +164,15 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
   },
 
   syncAccount: async (accountId, mailboxId = null) => {
-    set({ syncing: true, syncError: null, syncProgress: "Starting background sync…" });
+    set({
+      syncing: true,
+      syncError: null,
+      syncProgress: { message: "Starting background sync…", current: null, total: null },
+    });
     let unlisten: UnlistenFn | null = null;
 
     try {
-      unlisten = await listen<string>("sync-progress", (event) => {
+      unlisten = await listen<SyncProgress>("sync-progress", (event) => {
         set({ syncProgress: event.payload });
       });
 
@@ -215,11 +226,15 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
   },
 
   fetchHistory: async (accountId, mailboxId, days = 30, limit = 100) => {
-    set({ syncing: true, syncError: null, syncProgress: "Preparing history fetch…" });
+    set({
+      syncing: true,
+      syncError: null,
+      syncProgress: { message: "Preparing history fetch…", current: null, total: null },
+    });
     let unlisten: UnlistenFn | null = null;
 
     try {
-      unlisten = await listen<string>("sync-progress", (event) => {
+      unlisten = await listen<SyncProgress>("sync-progress", (event) => {
         set({ syncProgress: event.payload });
       });
 
@@ -244,6 +259,58 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
           const PAGE = currentCount + limit;
           const focusOnly = get().focusMode;
           
+          const threads = await invoke<Thread[]>("list_threads", {
+            request: {
+              account_id: accountId,
+              mailbox_id: mailboxId,
+              limit: PAGE,
+              offset: 0,
+              focus_only: focusOnly,
+            },
+          });
+          set({ threads, hasMore: threads.length >= PAGE });
+        }
+      };
+
+      const pollTimer = setInterval(() => {
+        void checkStatus();
+      }, 500);
+    } catch (e) {
+      set({ syncing: false, syncError: String(e), syncProgress: null });
+      throw e;
+    }
+  },
+
+  fetchEntireMailbox: async (accountId, mailboxId) => {
+    set({
+      syncing: true,
+      syncError: null,
+      syncProgress: { message: "Starting full mailbox fetch…", current: null, total: null },
+    });
+    let unlisten: UnlistenFn | null = null;
+
+    try {
+      unlisten = await listen<SyncProgress>("sync-progress", (event) => {
+        set({ syncProgress: event.payload });
+      });
+
+      await invoke<SyncResult>("fetch_entire_mailbox", {
+        request: {
+          account_id: accountId,
+          mailbox_id: mailboxId,
+        },
+      });
+
+      const checkStatus = async () => {
+        // We reuse get_sync_status which checks all keys
+        const isSyncing = await invoke<boolean>("get_sync_status", { accountId });
+        if (!isSyncing) {
+          if (pollTimer) clearInterval(pollTimer);
+          set({ syncing: false, syncProgress: null });
+          
+          const currentCount = get().threads.length;
+          const PAGE = Math.max(100, currentCount + 100);
+          const focusOnly = get().focusMode;
           const threads = await invoke<Thread[]>("list_threads", {
             request: {
               account_id: accountId,

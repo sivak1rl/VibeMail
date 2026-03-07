@@ -208,6 +208,13 @@
   color: var(--color-text-muted);
 }
 
+.historyActions {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  justify-content: center;
+}
+
 .historyBtn {
   background: none;
   border: 1px solid var(--color-border);
@@ -222,6 +229,22 @@
   border-color: var(--color-accent);
   background: var(--color-surface);
 }
+
+.historyBtnAll {
+  background: rgba(79, 142, 247, 0.05);
+  border-color: rgba(79, 142, 247, 0.3);
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+.dotHigh { background: #ff6b6b; box-shadow: 0 0 8px rgba(255, 107, 107, 0.4); }
+.dotMedium { background: #f1c40f; }
+.dotLow { background: #51cf66; opacity: 0.5; }
 
 @keyframes shimmer {
   0% { background-position: 200% 0; }

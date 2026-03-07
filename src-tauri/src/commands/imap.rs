@@ -98,34 +98,44 @@ pub async fn fetch_history(
                 };
 
                 println!(">>> HISTORY: Search query: {}", search_query);
-                let _ = app_clone.emit("sync-progress", format!("Searching for history: {}…", mailbox.name));
-                
+                let _ = app_clone.emit("sync-progress", SyncProgress {
+                    message: format!("Searching for history: {}…", mailbox.name),
+                    current: None,
+                    total: None,
+                });
+
                 let _select = session.select(&mailbox.name).await?;
                 let uids_set = session.uid_search(&search_query).await?;
                 let mut uids: Vec<u32> = uids_set.into_iter().collect();
                 uids.sort_unstable_by(|a, b| b.cmp(a)); // Newest of the older mail first
-                
+
                 println!(">>> HISTORY: Found {} candidate UIDs", uids.len());
-                
+
                 // Limit the number of history items per pull
                 uids.truncate(limit as usize);
-                
+
                 if !uids.is_empty() {
                     let batch_size = limit.min(500); // Caps individual IMAP fetch to 500 for safety
-                    for chunk in uids.chunks(batch_size as usize) {
-
+                    let total = uids.len();
+                    for (idx, chunk) in uids.chunks(batch_size as usize).enumerate() {
                         let uid_range = format_uid_sequence_set(chunk);
                         println!(">>> HISTORY: Fetching UID range: {}", uid_range);
-                        let _ = app_clone.emit("sync-progress", format!("Fetching {} history items for {}…", uids.len(), mailbox.name));
-                        
+                        let current_count = (idx * batch_size as usize) + chunk.len();
+                        let _ = app_clone.emit("sync-progress", SyncProgress {
+                            message: format!("Fetching {} history items for {}…", total, mailbox.name),
+                            current: Some(current_count),
+                            total: Some(total),
+                        });
+
+
                         let fetches: Vec<_> = session
                             .uid_fetch(&uid_range, "(BODY.PEEK[] FLAGS UID)")
                             .await?
                             .try_collect()
                             .await?;
-                        
+
                         println!(">>> HISTORY: Parsed {} fetches from server", fetches.len());
-                        
+
                         let gmail_labels = if account.provider == "gmail" {
                             crate::mail::imap::fetch_gmail_vibemail_labels(&mut session, &uid_range).await?
                         } else {
@@ -142,7 +152,7 @@ pub async fn fetch_history(
                     }
                 }
             }
-            
+
             let _ = session.logout().await;
             Ok::<usize, anyhow::Error>(total_new)
         }.await;
@@ -196,7 +206,6 @@ pub struct SetThreadsFlaggedRequest {
 pub struct ArchiveThreadsRequest {
     pub thread_ids: Vec<String>,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MailboxSummary {
     pub id: String,
@@ -209,6 +218,14 @@ pub struct MailboxSummary {
     pub thread_count: u32,
     pub unread_count: u32,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncProgress {
+    pub message: String,
+    pub current: Option<usize>,
+    pub total: Option<usize>,
+}
+
 
 impl From<crate::db::queries::MailboxStats> for MailboxSummary {
     fn from(value: crate::db::queries::MailboxStats) -> Self {
@@ -301,9 +318,14 @@ async fn sync_all_folders(
         db.list_mailboxes(account_id)?
     };
 
+    let total = mailboxes.len();
     let mut total_new = 0;
-    for mailbox in mailboxes {
-        let _ = app.emit("sync-progress", format!("Syncing {}…", mailbox.name));
+    for (i, mailbox) in mailboxes.into_iter().enumerate() {
+        let _ = app.emit("sync-progress", SyncProgress {
+            message: format!("Syncing {}…", mailbox.name),
+            current: Some(i + 1),
+            total: Some(total),
+        });
         match do_sync(
             account_id,
             Some(&mailbox.id),
@@ -363,34 +385,62 @@ async fn do_sync(
         }
     };
 
-    let _ = app.emit("sync-progress", format!("Syncing {}…", mailbox.name));
+    let _ = app.emit("sync-progress", SyncProgress {
+        message: format!("Syncing {}…", mailbox.name),
+        current: None,
+        total: None,
+    });
     println!(">>> SYNC: Starting sync for {}", mailbox.name);
 
-    let messages = match timeout(Duration::from_secs(60), mail_imap::sync_mailbox(&mut session, &account, &mut mailbox, db.clone(), {
+    // If it's a first-time sync (no uid_next), don't use a timeout.
+    // Otherwise, use 60s to prevent background hangs.
+    let is_fresh = mailbox.uid_next.is_none();
+
+    let sync_future = mail_imap::sync_mailbox(&mut session, &account, &mut mailbox, db.clone(), {
         let app = app.clone();
         move |status: &str| {
             println!(">>> SYNC PROGRESS: {}", status);
-            let _ = app.emit("sync-progress", status);
+            let _ = app.emit("sync-progress", SyncProgress {
+                message: status.to_string(),
+                current: None,
+                total: None,
+            });
         }
-    })).await {
-        Ok(res) => match res {
+    });
+
+    let messages = if is_fresh {
+        match sync_future.await {
             Ok(msgs) => msgs,
             Err(e) => {
                 println!(">>> SYNC ERROR: {}", e);
                 return Err(e.into());
             }
-        },
-        Err(_) => {
-            println!(">>> SYNC TIMEOUT for {}", mailbox.name);
-            tracing::warn!("Sync timeout for mailbox {}", mailbox.name);
-            return Ok(0);
+        }
+    } else {
+        match timeout(Duration::from_secs(60), sync_future).await {
+            Ok(res) => match res {
+                Ok(msgs) => msgs,
+                Err(e) => {
+                    println!(">>> SYNC ERROR: {}", e);
+                    return Err(e.into());
+                }
+            },
+            Err(_) => {
+                println!(">>> SYNC TIMEOUT for {}", mailbox.name);
+                tracing::warn!("Sync timeout for mailbox {}", mailbox.name);
+                return Ok(0);
+            }
         }
     };
-    
+
     let count = messages.len();
     println!(">>> SYNC: Downloaded {} messages for {}", count, mailbox.name);
     if count > 0 {
-        let _ = app.emit("sync-progress", format!("Indexing {} messages…", count));
+        let _ = app.emit("sync-progress", SyncProgress {
+            message: format!("Indexing {} messages…", count),
+            current: None,
+            total: None,
+        });
 
         let search = search.lock().await;
         for (msg, _) in &messages {
@@ -932,7 +982,7 @@ pub async fn get_attachment_data(
     let att = db.get_attachment_by_id(&id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "Attachment not found".to_string())?;
-    
+
     att.data.ok_or_else(|| "No data for this attachment".to_string())
 }
 
@@ -958,7 +1008,7 @@ pub async fn wipe_local_data(
     search: State<'_, Arc<Mutex<SearchIndex>>>,
 ) -> Result<(), String> {
     let reset = reset_schema.unwrap_or(false);
-    
+
     if reset {
         // Full file wipe is handled by deleting the files on next app start or via explicit deletion here
         // For simplicity, we drop all tables except accounts
@@ -974,6 +1024,125 @@ pub async fn wipe_local_data(
         search.clear_all().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub async fn fetch_entire_mailbox(
+    request: SyncAccountRequest,
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<Database>>>,
+    search: State<'_, Arc<Mutex<SearchIndex>>>,
+    sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
+) -> Result<SyncResult, String> {
+    let account_id = request.account_id.clone();
+    let mailbox_id = request.mailbox_id.clone();
+
+    if mailbox_id.is_none() {
+        return Err("A specific mailbox must be selected to fetch entire history".to_string());
+    }
+
+    {
+        let mut mgr: tokio::sync::MutexGuard<'_, SyncManager> = sync_mgr.lock().await;
+        let key = format!("entire:{}:{}", account_id, mailbox_id.as_ref().unwrap());
+        if mgr.is_syncing(&key) {
+            return Ok(SyncResult {
+                account_id,
+                mailbox_id,
+                new_messages: 0,
+                error: Some("Full fetch already in progress".to_string()),
+            });
+        }
+        mgr.start_sync(&key);
+    }
+
+    let db_clone = db.inner().clone();
+    let search_clone = search.inner().clone();
+    let sync_mgr_clone = sync_mgr.inner().clone();
+    let app_clone = app.clone();
+    let account_id_task = account_id.clone();
+    let mailbox_id_task = mailbox_id.clone();
+
+    tokio::spawn(async move {
+        let result = async {
+            let account = {
+                let db = db_clone.lock().await;
+                db.list_accounts()?
+                    .into_iter()
+                    .find(|a| a.id == account_id_task)
+                    .ok_or_else(|| anyhow::anyhow!("Account not found"))?
+            };
+
+            let mut session = mail_imap::connect_imap(&account).await?;
+            let mut total_new = 0;
+
+            let mailbox = {
+                let db = db_clone.lock().await;
+                db.get_mailbox_by_id(&account.id, mailbox_id_task.as_ref().unwrap())?
+                    .ok_or_else(|| anyhow::anyhow!("Mailbox not found"))?
+            };
+
+            let _ = app_clone.emit("sync-progress", SyncProgress {
+                message: format!("Starting full fetch for {}…", mailbox.name),
+                current: None,
+                total: None,
+            });
+            let _select = session.select(&mailbox.name).await?;
+
+            // Search for ALL messages
+            let uids_set = session.uid_search("ALL").await?;
+            let mut uids: Vec<u32> = uids_set.into_iter().collect();
+            uids.sort_unstable_by(|a, b| b.cmp(a)); // Newest first
+
+            if !uids.is_empty() {
+                let total = uids.len();
+                for (i, chunk) in uids.chunks(500).enumerate() {
+                    let uid_range = format_uid_sequence_set(chunk);
+                    let current_count = (i * 500) + chunk.len();
+                    let _ = app_clone.emit("sync-progress", SyncProgress {
+                        message: format!("Fetching messages {}-{} of {}…", i * 500, current_count, total),
+                        current: Some(current_count),
+                        total: Some(total),
+                    });
+                    let fetches: Vec<_> = session
+                        .uid_fetch(&uid_range, "(BODY.PEEK[] FLAGS UID)")
+                        .await?
+                        .try_collect()
+                        .await?;
+
+                    let gmail_labels = if account.provider == "gmail" {
+                        crate::mail::imap::fetch_gmail_vibemail_labels(&mut session, &uid_range).await?
+                    } else {
+                        HashMap::new()
+                    };
+
+                    let batch_results = crate::mail::imap::parse_fetches(&fetches, &account, &mailbox, &gmail_labels);
+                    if !batch_results.is_empty() {
+                        crate::mail::imap::persist_batch(&batch_results, &account, &mailbox, &db_clone).await?;
+                        total_new += batch_results.len();
+                    }
+                }
+            }
+
+            let _ = session.logout().await;
+            Ok::<usize, anyhow::Error>(total_new)
+        }.await;
+
+        let err = match result {
+            Ok(_) => None,
+            Err(e) => Some(e.to_string()),
+        };
+
+        let mut mgr: tokio::sync::MutexGuard<'_, SyncManager> = sync_mgr_clone.lock().await;
+        let key = format!("entire:{}:{}", account_id_task, mailbox_id_task.as_ref().unwrap());
+        mgr.finish_sync(&key, err);
+    });
+
+    Ok(SyncResult {
+        account_id,
+        mailbox_id,
+        new_messages: 0,
+        error: None,
+    })
 }
 
 #[tauri::command]

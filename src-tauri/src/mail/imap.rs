@@ -153,7 +153,7 @@ fn flag_to_string(f: &Flag<'_>) -> String {
 }
 
 /// Graduated batch sizes: start tiny for instant feedback, ramp up for throughput.
-const BATCH_SIZES: &[u32] = &[10, 25, 50, 100, 200, 500];
+const BATCH_SIZES: &[u32] = &[10, 25, 50, 100];
 /// On first sync (no prior uid_next), only grab the most recent N messages.
 const INITIAL_SYNC_LIMIT: u32 = 100;
 

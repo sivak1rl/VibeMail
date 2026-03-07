@@ -43,8 +43,10 @@ export default function Inbox({ onSettings }: Props) {
     setFocusMode,
     loadMoreThreads,
     fetchHistory,
+    fetchEntireMailbox,
     hasMore,
   } = useThreadStore();
+
   const { results: searchResults, query: searchQuery, clear: clearSearch } = useSearchStore();
   const { loadConfig, summarizeThreads, categorizeThreads, batchSummarizing, batchCategorizing } = useAiStore();
   const { autoLabelNewEmails, customCategories, autoSyncIntervalMinutes, historyFetchDays, historyFetchLimit } = usePreferencesStore();
@@ -131,6 +133,11 @@ export default function Inbox({ onSettings }: Props) {
     if (!activeAccountId || !selectedMailboxId) return;
     await fetchHistory(activeAccountId, selectedMailboxId, historyFetchDays, historyFetchLimit);
   }, [activeAccountId, selectedMailboxId, fetchHistory, historyFetchDays, historyFetchLimit]);
+
+  const handleFetchEntireMailbox = useCallback(async () => {
+    if (!activeAccountId || !selectedMailboxId) return;
+    await fetchEntireMailbox(activeAccountId, selectedMailboxId);
+  }, [activeAccountId, selectedMailboxId, fetchEntireMailbox]);
 
   const handleLoadMore = useCallback(() => {
     if (!activeAccountId) return;
@@ -389,8 +396,18 @@ export default function Inbox({ onSettings }: Props) {
 
         {syncing && syncProgress && (
           <div className={styles.sidebarStatus}>
-            <span className={styles.statusSpinner}>⟳</span>
-            {!sidebarCollapsed && <span className={styles.statusText}>{syncProgress}</span>}
+            <div className={styles.statusMain}>
+              <span className={styles.statusSpinner}>⟳</span>
+              {!sidebarCollapsed && <span className={styles.statusText}>{syncProgress.message}</span>}
+            </div>
+            {!sidebarCollapsed && syncProgress.current !== null && syncProgress.total !== null && (
+              <div className={styles.progressBar}>
+                <div 
+                  className={styles.progressFill} 
+                  style={{ width: `${(syncProgress.current / syncProgress.total) * 100}%` }} 
+                />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -476,9 +493,6 @@ export default function Inbox({ onSettings }: Props) {
                 : "Mark Unread"}
             </button>
           </div>
-          {syncing && syncProgress && (
-            <div className={styles.syncStatus}>{syncProgress}</div>
-          )}
           {syncError && <div className={styles.syncError}>{syncError}</div>}
         </div>
 
@@ -492,6 +506,7 @@ export default function Inbox({ onSettings }: Props) {
           onLoadMore={handleLoadMore}
           onRefresh={handleSync}
           onFetchHistory={handleFetchHistory}
+          onFetchAll={handleFetchEntireMailbox}
           hasMore={hasMore}
           query={searchQuery}
         />

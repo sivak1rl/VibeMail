@@ -13,6 +13,7 @@ interface Props {
   onLoadMore?: () => void;
   onRefresh?: () => Promise<void>;
   onFetchHistory?: () => Promise<void>;
+  onFetchAll?: () => Promise<void>;
   hasMore?: boolean;
   query?: string;
 }
@@ -91,6 +92,7 @@ export default function InboxList({
   onLoadMore,
   onRefresh,
   onFetchHistory,
+  onFetchAll,
   hasMore,
   query,
 }: Props) {
@@ -271,15 +273,33 @@ export default function InboxList({
       {loading && threads.length > 0 && (
         <div className={styles.loadingMore}>Loading more…</div>
       )}
-      {!loading && !hasMore && !query && onFetchHistory && (
+      {!loading && !hasMore && !query && (onFetchHistory || onFetchAll) && (
         <div className={styles.historyFooter}>
           <p className={styles.historyText}>End of local history</p>
-          <button 
-            className={styles.historyBtn}
-            onClick={() => onFetchHistory()}
-          >
-            Load older emails
-          </button>
+          <div className={styles.historyActions}>
+            {onFetchHistory && (
+              <button 
+                className={styles.historyBtn}
+                onClick={() => {
+                  console.log("InboxList: Requesting history fetch");
+                  void onFetchHistory();
+                }}
+              >
+                Load older emails
+              </button>
+            )}
+            {onFetchAll && (
+              <button 
+                className={`${styles.historyBtn} ${styles.historyBtnAll}`}
+                onClick={() => {
+                  console.log("InboxList: Requesting full fetch");
+                  void onFetchAll();
+                }}
+              >
+                Load entire folder
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
