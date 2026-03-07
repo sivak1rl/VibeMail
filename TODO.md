@@ -19,7 +19,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 ### UI/UX
 - [ ] Keyboard shortcuts (j/k navigation, r reply, a archive, e mark read)
 - [ ] Swipe actions on thread list (archive, delete, snooze)
-- [ ] Unread count badge in sidebar per mailbox
+- [x] Unread count badge in sidebar per mailbox
 - [ ] "Pull to refresh" gesture on thread list
 - [ ] Empty state illustrations (no mail, no search results)
 - [ ] Loading skeleton improvements during sync
@@ -135,7 +135,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] CI pipeline — run `cargo test`, `cargo clippy`, `npx tsc --noEmit` on PR
 - [ ] Replace file-based token store with OS keychain (fix Linux secret-service detection)
 - [ ] Remove unused `StartOAuthRequest` struct
-- [ ] Remove unused `list_mailboxes` function or wire it into UI
+- [x] Remove unused `list_mailboxes` function or wire it into UI
 - [ ] Proper error boundaries in React (catch panics gracefully)
 - [ ] Structured logging with log levels (replace remaining eprintln)
 - [ ] Rate limiting on token refresh (don't refresh on every IMAP connect)

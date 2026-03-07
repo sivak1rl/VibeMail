@@ -44,7 +44,10 @@ impl AiRouter {
             "openai_compat" => {
                 let api_key = keychain::get_api_key("byok")?
                     .ok_or_else(|| anyhow!("No API key configured. Add your key in Settings."))?;
-                Ok(Box::new(OpenAICompatProvider::new(&config.base_url, &api_key)))
+                Ok(Box::new(OpenAICompatProvider::new(
+                    &config.base_url,
+                    &api_key,
+                )))
             }
             other => Err(anyhow!("Unknown AI provider: {}", other)),
         }

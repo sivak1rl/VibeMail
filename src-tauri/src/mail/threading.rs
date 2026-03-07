@@ -41,21 +41,25 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
         // Link references chain parent→child
         for i in 0..refs.len() {
             let ref_id = &refs[i];
-            id_table.entry(ref_id.clone()).or_insert_with(|| ThreadNode {
-                message_id: Some(ref_id.clone()),
-                message: None,
-                parent: None,
-                children: Vec::new(),
-            });
-
-            if i + 1 < refs.len() {
-                let child_id = &refs[i + 1];
-                id_table.entry(child_id.clone()).or_insert_with(|| ThreadNode {
-                    message_id: Some(child_id.clone()),
+            id_table
+                .entry(ref_id.clone())
+                .or_insert_with(|| ThreadNode {
+                    message_id: Some(ref_id.clone()),
                     message: None,
                     parent: None,
                     children: Vec::new(),
                 });
+
+            if i + 1 < refs.len() {
+                let child_id = &refs[i + 1];
+                id_table
+                    .entry(child_id.clone())
+                    .or_insert_with(|| ThreadNode {
+                        message_id: Some(child_id.clone()),
+                        message: None,
+                        parent: None,
+                        children: Vec::new(),
+                    });
                 // Only link if child has no parent (avoid cycles)
                 let child_has_parent = id_table[child_id].parent.is_some();
                 if !child_has_parent {

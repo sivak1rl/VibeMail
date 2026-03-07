@@ -27,7 +27,7 @@ pub fn run() {
         .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("outlookr=info,warn")),
+                .unwrap_or_else(|_| EnvFilter::new("vibemail=info,warn")),
         )
         .init();
 
@@ -42,7 +42,7 @@ pub fn run() {
                 .expect("failed to get app data dir");
             std::fs::create_dir_all(&app_data_dir)?;
 
-            let db_path = app_data_dir.join("outlookr.db");
+            let db_path = app_data_dir.join("vibemail.db");
             let db = db::Database::open(&db_path)?;
             let db = Arc::new(tokio::sync::Mutex::new(db));
 

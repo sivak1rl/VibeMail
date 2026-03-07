@@ -56,7 +56,7 @@ export default function Inbox({ onSettings }: Props) {
         await fetchMailboxes(activeAccountId);
         const initialMailboxId = useMailboxStore.getState().selectedMailboxId;
         await syncAccount(activeAccountId, initialMailboxId);
-        await fetchMailboxes(activeAccountId);
+        await fetchMailboxes(activeAccountId, true);
       })();
     }
   }, [activeAccountId, clearSearch, fetchMailboxes, syncAccount]);
@@ -70,7 +70,7 @@ export default function Inbox({ onSettings }: Props) {
   const handleSync = useCallback(async () => {
     if (!activeAccountId) return;
     await syncAccount(activeAccountId, selectedMailboxId);
-    await fetchMailboxes(activeAccountId);
+    await fetchMailboxes(activeAccountId, true);
   }, [activeAccountId, fetchMailboxes, selectedMailboxId, syncAccount]);
 
   const handleLoadMore = useCallback(() => {
@@ -92,7 +92,7 @@ export default function Inbox({ onSettings }: Props) {
       {/* Sidebar */}
       <div className={styles.sidebar}>
         <div className={styles.sidebarHeader}>
-          <span className={styles.logo}>Outlookr</span>
+          <span className={styles.logo}>VibeMail</span>
           <button className={styles.settingsBtn} onClick={onSettings} title="Settings">
             ⚙
           </button>

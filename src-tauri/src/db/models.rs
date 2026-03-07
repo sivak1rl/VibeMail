@@ -99,7 +99,7 @@ impl Default for AiConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractedAction {
-    pub kind: String,     // "todo" | "date" | "followup"
+    pub kind: String, // "todo" | "date" | "followup"
     pub text: String,
     pub date: Option<String>,
     pub priority: Option<String>,

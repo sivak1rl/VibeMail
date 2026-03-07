@@ -79,10 +79,7 @@ impl AiProvider for OllamaProvider {
             .error_for_status()?;
 
         let data: OllamaResponse = resp.json().await?;
-        let content = data
-            .message
-            .map(|m| m.content)
-            .unwrap_or_default();
+        let content = data.message.map(|m| m.content).unwrap_or_default();
 
         Ok(CompletionResponse {
             content,

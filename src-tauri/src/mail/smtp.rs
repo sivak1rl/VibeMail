@@ -70,7 +70,12 @@ async fn build_transport(account: &Account) -> Result<AsyncSmtpTransport<Tokio1E
         .ok()
         .flatten()
         .or_else(|| keychain::get_token(&account.id, "password").ok().flatten())
-        .ok_or_else(|| anyhow!("No credentials stored for SMTP (account: {})", account.email))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "No credentials stored for SMTP (account: {})",
+                account.email
+            )
+        })?;
 
     let creds = Credentials::new(account.email.clone(), password);
     let transport = AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&account.smtp_host)?

@@ -61,12 +61,7 @@ pub fn build_thread_context(
         } else {
             msg.from
                 .first()
-                .map(|a| {
-                    a.name
-                        .as_deref()
-                        .unwrap_or(&a.email)
-                        .to_string()
-                })
+                .map(|a| a.name.as_deref().unwrap_or(&a.email).to_string())
                 .unwrap_or_default()
         };
 

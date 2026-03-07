@@ -144,26 +144,78 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
   syncAccount: async (accountId, mailboxId = null) => {
     set({ syncing: true, syncError: null, syncProgress: "Starting sync…" });
     let unlisten: UnlistenFn | null = null;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let pollInFlight = false;
+
+    const refreshWhileSyncing = async () => {
+      if (pollInFlight) return;
+      pollInFlight = true;
+      try {
+        const PAGE = 50;
+        const focusOnly = get().focusMode;
+        const threads = await invoke<Thread[]>("list_threads", {
+          request: {
+            account_id: accountId,
+            mailbox_id: mailboxId,
+            limit: PAGE,
+            offset: 0,
+            focus_only: focusOnly,
+          },
+        });
+
+        const { selectedThreadId } = get();
+        const nextSelectedId =
+          selectedThreadId && threads.some((thread) => thread.id === selectedThreadId)
+            ? selectedThreadId
+            : threads[0]?.id ?? null;
+
+        set({
+          threads,
+          hasMore: threads.length >= PAGE,
+          selectedThreadId: nextSelectedId,
+        });
+
+        if (nextSelectedId && nextSelectedId !== selectedThreadId) {
+          await get().selectThread(nextSelectedId);
+        }
+      } catch {
+        // Keep sync running even if a mid-sync refresh fails.
+      } finally {
+        pollInFlight = false;
+      }
+    };
+
     try {
       unlisten = await listen<string>("sync-progress", (event) => {
         set({ syncProgress: event.payload });
       });
+
+      // Render messages incrementally as batches are persisted during sync.
+      await refreshWhileSyncing();
+      pollTimer = setInterval(() => {
+        void refreshWhileSyncing();
+      }, 900);
+
       const result = await invoke<SyncResult>("sync_account", {
         request: {
           account_id: accountId,
           mailbox_id: mailboxId,
         },
       });
-      set({ syncing: false, syncError: result.error, syncProgress: null });
-      if (!result.error) {
-        await get().fetchThreads(accountId, mailboxId, get().focusMode);
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
       }
+
+      await refreshWhileSyncing();
+      set({ syncing: false, syncError: result.error, syncProgress: null });
       return result;
     } catch (e) {
       const error = String(e);
       set({ syncing: false, syncError: error, syncProgress: null });
       throw e;
     } finally {
+      if (pollTimer) clearInterval(pollTimer);
       if (unlisten) unlisten();
     }
   },

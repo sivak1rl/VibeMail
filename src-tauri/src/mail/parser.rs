@@ -1,7 +1,7 @@
 use crate::db::models::{EmailAddress, Message};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use mail_parser::{Address, Addr, HeaderValue, MessageParser};
+use mail_parser::{Addr, Address, HeaderValue, MessageParser};
 
 pub fn parse_message(
     raw: &[u8],

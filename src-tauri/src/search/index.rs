@@ -6,7 +6,7 @@ use tantivy::{
     directory::MmapDirectory,
     doc,
     query::QueryParser,
-    schema::{Schema, STORED, TEXT, Value},
+    schema::{Schema, Value, STORED, TEXT},
     Index, IndexWriter, ReloadPolicy, TantivyDocument,
 };
 

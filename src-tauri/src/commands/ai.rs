@@ -1,11 +1,11 @@
 use crate::ai::{
+    provider::{build_thread_context, ChatMessage},
     router::{AiRouter, TaskKind},
     stream::stream_to_frontend,
     tools::{
         parse_extracted_actions, parse_triage_score, SYSTEM_DRAFT, SYSTEM_EXTRACT,
         SYSTEM_SUMMARIZE, SYSTEM_TRIAGE,
     },
-    provider::{build_thread_context, ChatMessage},
 };
 use crate::db::{
     models::{AiConfig, ExtractedAction},
@@ -51,13 +51,22 @@ pub async fn summarize_thread(
 
     let context = build_thread_context(&messages, 6000, privacy);
     let chat_messages = vec![
-        ChatMessage { role: "system".into(), content: SYSTEM_SUMMARIZE.into() },
-        ChatMessage { role: "user".into(), content: format!("Thread to summarize:\n\n{}", context) },
+        ChatMessage {
+            role: "system".into(),
+            content: SYSTEM_SUMMARIZE.into(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: format!("Thread to summarize:\n\n{}", context),
+        },
     ];
 
     let stream = {
         let router = router.lock().await;
-        router.stream_complete(TaskKind::Summary, chat_messages).await.map_err(|e| e.to_string())?
+        router
+            .stream_complete(TaskKind::Summary, chat_messages)
+            .await
+            .map_err(|e| e.to_string())?
     };
 
     let event_name = format!("ai_summary_{}", request.thread_id);
@@ -95,13 +104,22 @@ pub async fn draft_reply(
 
     let context = build_thread_context(&messages, 6000, privacy);
     let chat_messages = vec![
-        ChatMessage { role: "system".into(), content: SYSTEM_DRAFT.into() },
-        ChatMessage { role: "user".into(), content: format!("Email thread:\n\n{}", context) },
+        ChatMessage {
+            role: "system".into(),
+            content: SYSTEM_DRAFT.into(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: format!("Email thread:\n\n{}", context),
+        },
     ];
 
     let stream = {
         let router = router.lock().await;
-        router.stream_complete(TaskKind::Draft, chat_messages).await.map_err(|e| e.to_string())?
+        router
+            .stream_complete(TaskKind::Draft, chat_messages)
+            .await
+            .map_err(|e| e.to_string())?
     };
 
     let event_name = format!("ai_draft_{}", request.thread_id);
@@ -132,13 +150,22 @@ pub async fn extract_actions(
 
     let context = build_thread_context(&messages, 4000, privacy);
     let chat_messages = vec![
-        ChatMessage { role: "system".into(), content: SYSTEM_EXTRACT.into() },
-        ChatMessage { role: "user".into(), content: format!("Email thread:\n\n{}", context) },
+        ChatMessage {
+            role: "system".into(),
+            content: SYSTEM_EXTRACT.into(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: format!("Email thread:\n\n{}", context),
+        },
     ];
 
     let response = {
         let router = router.lock().await;
-        router.complete(TaskKind::Extract, chat_messages).await.map_err(|e| e.to_string())?
+        router
+            .complete(TaskKind::Extract, chat_messages)
+            .await
+            .map_err(|e| e.to_string())?
     };
 
     parse_extracted_actions(&response).map_err(|e| e.to_string())
@@ -161,11 +188,24 @@ pub async fn triage_thread(
 
     let first = &messages[0];
     let subject = first.subject.as_deref().unwrap_or("[no subject]");
-    let sender = first.from.first().map(|a| a.email.as_str()).unwrap_or("[unknown]");
-    let snippet = first.body_text.as_deref().unwrap_or("").chars().take(500).collect::<String>();
+    let sender = first
+        .from
+        .first()
+        .map(|a| a.email.as_str())
+        .unwrap_or("[unknown]");
+    let snippet = first
+        .body_text
+        .as_deref()
+        .unwrap_or("")
+        .chars()
+        .take(500)
+        .collect::<String>();
 
     let chat_messages = vec![
-        ChatMessage { role: "system".into(), content: SYSTEM_TRIAGE.into() },
+        ChatMessage {
+            role: "system".into(),
+            content: SYSTEM_TRIAGE.into(),
+        },
         ChatMessage {
             role: "user".into(),
             content: format!("From: {}\nSubject: {}\n\n{}", sender, subject, snippet),
@@ -174,7 +214,10 @@ pub async fn triage_thread(
 
     let response = {
         let router = router.lock().await;
-        router.complete(TaskKind::Triage, chat_messages).await.map_err(|e| e.to_string())?
+        router
+            .complete(TaskKind::Triage, chat_messages)
+            .await
+            .map_err(|e| e.to_string())?
     };
 
     let score = parse_triage_score(&response);
@@ -186,13 +229,14 @@ pub async fn triage_thread(
         let _ = db.update_thread_summary(&request.thread_id, "");
     }
 
-    Ok(TriageResult { thread_id: request.thread_id, score })
+    Ok(TriageResult {
+        thread_id: request.thread_id,
+        score,
+    })
 }
 
 #[tauri::command]
-pub async fn get_ai_config(
-    db: State<'_, Arc<Mutex<Database>>>,
-) -> Result<AiConfig, String> {
+pub async fn get_ai_config(db: State<'_, Arc<Mutex<Database>>>) -> Result<AiConfig, String> {
     let db = db.lock().await;
     db.get_ai_config().map_err(|e| e.to_string())
 }
@@ -209,8 +253,7 @@ pub async fn set_ai_config(
     db: State<'_, Arc<Mutex<Database>>>,
 ) -> Result<(), String> {
     if let Some(key) = &request.api_key {
-        crate::auth::keychain::store_api_key("byok", key)
-            .map_err(|e| e.to_string())?;
+        crate::auth::keychain::store_api_key("byok", key).map_err(|e| e.to_string())?;
     }
     let db = db.lock().await;
     db.set_ai_config(&request.config).map_err(|e| e.to_string())
