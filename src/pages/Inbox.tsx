@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Component, ReactNode } from "react";
 import { useAccountStore } from "../stores/accounts";
 import { useMailboxStore } from "../stores/mailboxes";
 import { useThreadStore } from "../stores/threads";
@@ -10,6 +10,36 @@ import InboxList from "../components/InboxList/InboxList";
 import ThreadView from "../components/ThreadView/ThreadView";
 import SearchBar from "../components/SearchBar/SearchBar";
 import styles from "./Inbox.module.css";
+import { invoke } from "@tauri-apps/api/core";
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: "40px", color: "#ff6b6b", background: "#1a1a1a", height: "100%" }}>
+          <h2>Something went wrong in the view.</h2>
+          <pre style={{ fontSize: "12px", marginTop: "20px", whiteSpace: "pre-wrap" }}>
+            {this.state.error?.stack}
+          </pre>
+          <button 
+            onClick={() => this.setState({ hasError: false })}
+            style={{ marginTop: "20px", padding: "8px 16px", cursor: "pointer" }}
+          >
+            Try Refreshing View
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface Props {
   onSettings: () => void;
@@ -122,6 +152,16 @@ export default function Inbox({ onSettings }: Props) {
 
   const displayedThreads = showSearch && searchQuery ? searchResults : threads;
   const selectedThread = displayedThreads.find((t) => t.id === selectedThreadId) ?? null;
+
+  useEffect(() => {
+    if (selectedThreadId) {
+      console.log("Inbox: selectedThreadId changed to", selectedThreadId);
+      console.log("Inbox: found in displayedThreads?", !!selectedThread);
+      if (!selectedThread && displayedThreads.length > 0) {
+        console.warn("Inbox: selectedThread is NULL despite having threads. First ID:", displayedThreads[0].id);
+      }
+    }
+  }, [selectedThreadId, selectedThread, displayedThreads]);
   const selectedSet = new Set(selectedThreadIds);
   const selectedThreads = displayedThreads.filter((thread) => selectedSet.has(thread.id));
   const selectedUnreadThreads = selectedThreads.filter((thread) => thread.unread_count > 0);
@@ -454,7 +494,9 @@ export default function Inbox({ onSettings }: Props) {
 
       {/* Thread view */}
       <div className={styles.threadPane}>
-        <ThreadView thread={selectedThread} messages={threadMessages} />
+        <ErrorBoundary>
+          <ThreadView thread={selectedThread} messages={threadMessages} />
+        </ErrorBoundary>
       </div>
     </div>
   );

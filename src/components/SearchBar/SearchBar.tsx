@@ -72,7 +72,7 @@ export default function SearchBar({ mailboxId = null, onResults, onClear }: Prop
     }
 
     timerRef.current = setTimeout(() => {
-      void runSearch(val);
+      void runSearch(val.trim());
     }, 350);
   };
 
@@ -92,7 +92,12 @@ export default function SearchBar({ mailboxId = null, onResults, onClear }: Prop
   const applyFilter = (filter: string) => {
     const newQuery = localQuery.trim() ? `${localQuery} ${filter}` : filter;
     setLocalQuery(newQuery);
-    void runSearch(newQuery);
+    // Filters are best handled by standard search, so we force it here
+    if (activeAccountId) {
+      void search(newQuery, activeAccountId, mailboxId);
+      setShowHistory(false);
+      onResults();
+    }
   };
 
   return (

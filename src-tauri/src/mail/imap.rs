@@ -162,7 +162,7 @@ pub async fn sync_mailbox(
     mailbox: &mut Mailbox,
     db: Arc<Mutex<Database>>,
     on_progress: impl Fn(&str),
-) -> Result<Vec<Message>> {
+) -> Result<Vec<(Message, Vec<Attachment>)>> {
     let select = session.select(&mailbox.name).await?;
 
     let is_fresh = select.uid_validity != mailbox.uid_validity || mailbox.uid_next.is_none();
@@ -175,7 +175,7 @@ pub async fn sync_mailbox(
         return Ok(vec![]);
     }
 
-    let mut all_messages = Vec::new();
+    let mut all_results = Vec::new();
     let mut batch_idx: usize = 0;
 
     if is_fresh {
@@ -191,7 +191,7 @@ pub async fn sync_mailbox(
 
             on_progress(&format!(
                 "Fetching newest mail… {} so far",
-                all_messages.len()
+                all_results.len()
             ));
 
             info!(
@@ -212,11 +212,11 @@ pub async fn sync_mailbox(
 
             cursor = batch_start.saturating_sub(1);
             // Process this batch (continues below via shared parsing code)
-            let batch_messages = parse_fetches(&fetches, account, mailbox, &gmail_labels);
-            if !batch_messages.is_empty() {
-                persist_batch(&batch_messages, account, mailbox, &db).await?;
+            let batch_results = parse_fetches(&fetches, account, mailbox, &gmail_labels);
+            if !batch_results.is_empty() {
+                persist_batch(&batch_results, account, mailbox, &db).await?;
             }
-            all_messages.extend(batch_messages);
+            all_results.extend(batch_results);
 
             if cursor < 1 {
                 break;
@@ -233,7 +233,7 @@ pub async fn sync_mailbox(
             let batch_end = (batch_start + batch_size - 1).min(server_uid_next);
             let uid_range = format!("{}:{}", batch_start, batch_end);
 
-            on_progress(&format!("Fetching new mail… {} so far", all_messages.len()));
+            on_progress(&format!("Fetching new mail… {} so far", all_results.len()));
 
             info!(
                 "Fetching UIDs {}..{} from {}/{}",
@@ -251,11 +251,11 @@ pub async fn sync_mailbox(
                 HashMap::new()
             };
 
-            let batch_messages = parse_fetches(&fetches, account, mailbox, &gmail_labels);
-            if !batch_messages.is_empty() {
-                persist_batch(&batch_messages, account, mailbox, &db).await?;
+            let batch_results = parse_fetches(&fetches, account, mailbox, &gmail_labels);
+            if !batch_results.is_empty() {
+                persist_batch(&batch_results, account, mailbox, &db).await?;
             }
-            all_messages.extend(batch_messages);
+            all_results.extend(batch_results);
             batch_start = batch_end + 1;
         }
     }
@@ -266,14 +266,93 @@ pub async fn sync_mailbox(
         db.upsert_mailbox(mailbox)?;
     }
 
+    // Refresh metadata for existing messages that have attachments but no records in the attachments table
+    refresh_missing_attachments(session, account, mailbox, &db, &on_progress).await?;
+
     info!(
         "Synced {} messages from {}/{}",
-        all_messages.len(),
+        all_results.len(),
         account.email,
         mailbox.name
     );
 
-    Ok(all_messages)
+    Ok(all_results)
+}
+
+async fn refresh_missing_attachments(
+    session: &mut ImapSession,
+    account: &Account,
+    mailbox: &Mailbox,
+    db: &Arc<Mutex<Database>>,
+    on_progress: &impl Fn(&str),
+) -> Result<()> {
+    let missing_uids = {
+        let db = db.lock().await;
+        db.get_messages_missing_attachments(&mailbox.id)?
+    };
+
+    if missing_uids.is_empty() {
+        return Ok(());
+    }
+
+    on_progress(&format!("Refreshing {} messages with attachments…", missing_uids.len()));
+    info!("Refreshing {} messages with attachments for {}", missing_uids.len(), mailbox.name);
+
+    for chunk in missing_uids.chunks(50) {
+        let uid_range = format_uid_sequence_set(chunk);
+        let fetches: Vec<_> = session
+            .uid_fetch(&uid_range, "(BODY.PEEK[] FLAGS UID)")
+            .await?
+            .try_collect()
+            .await?;
+        
+        let gmail_labels = if account.provider == "gmail" {
+            fetch_gmail_vibemail_labels(session, &uid_range).await?
+        } else {
+            HashMap::new()
+        };
+
+        let batch_results = parse_fetches(&fetches, account, mailbox, &gmail_labels);
+        if !batch_results.is_empty() {
+            persist_batch(&batch_results, account, mailbox, db).await?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn format_uid_sequence_set(uids: &[u32]) -> String {
+    if uids.is_empty() {
+        return String::new();
+    }
+
+    let mut sorted = uids.to_vec();
+    sorted.sort_unstable();
+
+    let mut ranges = Vec::new();
+    let mut start = sorted[0];
+    let mut prev = sorted[0];
+    for &uid in &sorted[1..] {
+        if uid == prev + 1 {
+            prev = uid;
+            continue;
+        }
+        if start == prev {
+            ranges.push(start.to_string());
+        } else {
+            ranges.push(format!("{}:{}", start, prev));
+        }
+        start = uid;
+        prev = uid;
+    }
+
+    if start == prev {
+        ranges.push(start.to_string());
+    } else {
+        ranges.push(format!("{}:{}", start, prev));
+    }
+
+    ranges.join(",")
 }
 
 fn parse_fetches(
@@ -281,8 +360,8 @@ fn parse_fetches(
     account: &Account,
     mailbox: &Mailbox,
     gmail_labels: &HashMap<u32, Vec<String>>,
-) -> Vec<Message> {
-    let mut messages = Vec::new();
+) -> Vec<(Message, Vec<Attachment>)> {
+    let mut results = Vec::new();
     for fetch in fetches {
         let uid = match fetch.uid {
             Some(u) => u,
@@ -294,7 +373,7 @@ fn parse_fetches(
         };
         let msg_id = format!("{}:{}:{}", account.id, mailbox.id, uid);
         match parser::parse_message(raw, &msg_id, &account.id, &mailbox.id, uid) {
-            Ok(mut msg) => {
+            Ok((mut msg, atts)) => {
                 msg.flags = fetch
                     .flags()
                     .map(|f| flag_to_string(&f))
@@ -303,21 +382,22 @@ fn parse_fetches(
                 if let Some(labels) = gmail_labels.get(&uid) {
                     msg.flags.extend(labels.iter().cloned());
                 }
-                messages.push(msg);
+                results.push((msg, atts));
             }
             Err(e) => warn!("Failed to parse uid={}: {}", uid, e),
         }
     }
-    messages
+    results
 }
 
 async fn persist_batch(
-    messages: &[Message],
+    batch: &[(Message, Vec<Attachment>)],
     account: &Account,
     mailbox: &Mailbox,
     db: &Arc<Mutex<Database>>,
 ) -> Result<()> {
-    let threads = threading::build_threads(messages.to_vec(), &account.id);
+    let messages: Vec<Message> = batch.iter().map(|(m, _)| m.clone()).collect();
+    let threads = threading::build_threads(messages, &account.id);
     let db = db.lock().await;
     db.upsert_mailbox(mailbox)?;
     for thread in &threads {
@@ -325,6 +405,14 @@ async fn persist_batch(
         if let Some(msgs) = &thread.messages {
             for msg in msgs {
                 db.upsert_message(msg)?;
+                // Clear old attachments for this message before re-adding
+                db.delete_message_attachments(&msg.id)?;
+                // Find matching attachments in batch
+                if let Some((_, atts)) = batch.iter().find(|(m, _)| m.id == msg.id) {
+                    for att in atts {
+                        db.upsert_attachment(att)?;
+                    }
+                }
             }
         }
     }

@@ -164,6 +164,7 @@ export default function InboxList({
             <div className={styles.itemMid}>
               <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
                 {thread.is_flagged && <span className={styles.star}>★</span>}
+                {thread.has_attachments && <span className={styles.paperclip}>📎</span>}
                 <span className={styles.subject}>
                   <Highlight text={thread.subject ?? "(no subject)"} query={query} />
                 </span>

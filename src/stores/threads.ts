@@ -37,6 +37,7 @@ export interface Thread {
   message_count: number;
   unread_count: number;
   is_flagged: boolean;
+  has_attachments: boolean;
   last_date: string | null;
   last_from: string | null;
   triage_score: number | null;
@@ -140,12 +141,17 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
   },
 
   selectThread: async (threadId) => {
+    if (!threadId) return;
     set({ selectedThreadId: threadId });
     try {
       const messages = await invoke<Message[]>("get_thread", { threadId });
+      if (!Array.isArray(messages)) {
+        throw new Error("get_thread returned invalid data (not an array)");
+      }
       set({ threadMessages: messages });
     } catch (e) {
-      console.error("Failed to load thread messages:", e);
+      console.error("Store: Failed to load thread messages:", e);
+      set({ threadMessages: [] });
     }
   },
 
@@ -251,40 +257,46 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
     const ids = [...new Set(threadIds)].filter(Boolean);
     if (ids.length === 0) return;
 
-    await invoke<number>("set_threads_flagged", {
-      request: {
-        thread_ids: ids,
-        flagged,
-      },
-    });
+    try {
+      await invoke<number>("set_threads_flagged", {
+        request: {
+          thread_ids: ids,
+          flagged,
+        },
+      });
 
-    set((state) => {
-      const idSet = new Set(ids);
-      const threads = state.threads.map((thread) =>
-        idSet.has(thread.id)
-          ? {
-              ...thread,
-              is_flagged: flagged,
-            }
-          : thread,
-      );
+      set((state) => {
+        const idSet = new Set(ids);
+        const threads = state.threads.map((thread) =>
+          idSet.has(thread.id)
+            ? {
+                ...thread,
+                is_flagged: flagged,
+              }
+            : thread,
+        );
 
-      const selected = state.selectedThreadId;
-      const selectedIsTarget = selected ? idSet.has(selected) : false;
-      const threadMessages = selectedIsTarget
-        ? state.threadMessages.map((message) => {
-            const flags = new Set(message.flags);
+        const selected = state.selectedThreadId;
+        const selectedIsTarget = selected ? idSet.has(selected) : false;
+        
+        let threadMessages = state.threadMessages;
+        if (selectedIsTarget && Array.isArray(threadMessages)) {
+          threadMessages = threadMessages.map((message) => {
+            const flags = new Set(message.flags || []);
             if (flagged) {
               flags.add("\\Flagged");
             } else {
               flags.delete("\\Flagged");
             }
             return { ...message, flags: Array.from(flags) };
-          })
-        : state.threadMessages;
+          });
+        }
 
-      return { threads, threadMessages };
-    });
+        return { threads, threadMessages };
+      });
+    } catch (e) {
+      console.error("Store: setThreadsFlagged failed:", e);
+    }
   },
 
   archiveThreads: async (threadIds) => {

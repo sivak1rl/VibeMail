@@ -223,12 +223,13 @@ impl Database {
     pub fn upsert_thread(&self, thread: &Thread) -> Result<()> {
         self.conn.execute(
             r#"INSERT INTO threads
-               (id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, last_date, last_from, triage_score, labels)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+               (id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, has_attachments, last_date, last_from, triage_score, labels)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
                ON CONFLICT(id) DO UPDATE SET
                subject=excluded.subject, participant_ids=excluded.participant_ids,
                message_count=excluded.message_count, unread_count=excluded.unread_count,
                is_flagged=excluded.is_flagged,
+               has_attachments=excluded.has_attachments,
                last_date=excluded.last_date, last_from=excluded.last_from,
                triage_score=COALESCE(excluded.triage_score, threads.triage_score),
                labels=CASE
@@ -241,6 +242,7 @@ impl Database {
                 serde_json::to_string(&thread.participants)?,
                 thread.message_count as i64, thread.unread_count as i64,
                 thread.is_flagged as i64,
+                thread.has_attachments as i64,
                 thread.last_date.map(|d| d.timestamp()),
                 thread.last_from,
                 thread.triage_score,
@@ -267,12 +269,13 @@ impl Database {
                 message_count: row.get::<_, i64>(4)? as u32,
                 unread_count: row.get::<_, i64>(5)? as u32,
                 is_flagged: row.get::<_, i64>(6)? != 0,
+                has_attachments: row.get::<_, i64>(7)? != 0,
                 last_date: row
-                    .get::<_, Option<i64>>(7)?
+                    .get::<_, Option<i64>>(8)?
                     .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
-                last_from: row.get(8)?,
-                triage_score: row.get(9)?,
-                labels: serde_json::from_str(&row.get::<_, String>(10).unwrap_or_default())
+                last_from: row.get(9)?,
+                triage_score: row.get(10)?,
+                labels: serde_json::from_str(&row.get::<_, String>(11).unwrap_or_default())
                     .unwrap_or_default(),
                 messages: None,
             })
@@ -283,7 +286,7 @@ impl Database {
         let threads = if let Some(mailbox_id) = mailbox_id {
             let mut stmt = self.conn.prepare(
                 r#"SELECT t.id, t.account_id, t.subject, t.participant_ids, t.message_count,
-                   t.unread_count, t.is_flagged, t.last_date, t.last_from, t.triage_score, t.labels
+                   t.unread_count, t.is_flagged, t.has_attachments, t.last_date, t.last_from, t.triage_score, t.labels
                    FROM threads t
                    WHERE t.account_id=?1
                      AND EXISTS (
@@ -300,7 +303,7 @@ impl Database {
         } else {
             let mut stmt = self.conn.prepare(
                 r#"SELECT id, account_id, subject, participant_ids, message_count, unread_count,
-                   is_flagged, last_date, last_from, triage_score, labels
+                   is_flagged, has_attachments, last_date, last_from, triage_score, labels
                    FROM threads WHERE account_id=?1
                    ORDER BY last_date DESC LIMIT ?2 OFFSET ?3"#,
             )?;
@@ -668,7 +671,7 @@ impl Database {
     pub fn get_threads_by_ids(
         &self,
         ids: &[String],
-        mailbox_id: Option<&str>,
+        _mailbox_id: Option<&str>,
     ) -> Result<Vec<Thread>> {
         if ids.is_empty() {
             return Ok(vec![]);
@@ -679,29 +682,12 @@ impl Database {
             .map(|(i, _)| format!("?{}", i + 1))
             .collect::<Vec<_>>()
             .join(",");
-        let sql = if mailbox_id.is_some() {
-            format!(
-                "SELECT t.id, t.account_id, t.subject, t.participant_ids, t.message_count, t.unread_count, t.is_flagged, t.last_date, t.last_from, t.triage_score, t.labels
-                 FROM threads t
-                 WHERE t.id IN ({})
-                   AND EXISTS (
-                     SELECT 1 FROM messages m
-                     WHERE m.thread_id = t.id AND m.mailbox_id = ?{}
-                   )
-                 ORDER BY t.last_date DESC",
-                placeholders,
-                ids.len() + 1
-            )
-        } else {
-            format!(
-                "SELECT id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, last_date, last_from, triage_score, labels
-                 FROM threads WHERE id IN ({}) ORDER BY last_date DESC",
-                placeholders
-            )
-        };
-
-        println!(">>> HYDRATE SQL: {}", sql);
-        println!(">>> HYDRATE IDs: {:?}", ids);
+        
+        let sql = format!(
+            "SELECT id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, has_attachments, last_date, last_from, triage_score, labels
+             FROM threads WHERE id IN ({}) ORDER BY last_date DESC",
+            placeholders
+        );
 
         let map_thread = |row: &rusqlite::Row<'_>| {
             Ok(Thread {
@@ -713,31 +699,24 @@ impl Database {
                 message_count: row.get::<_, i64>(4)? as u32,
                 unread_count: row.get::<_, i64>(5)? as u32,
                 is_flagged: row.get::<_, i64>(6)? != 0,
+                has_attachments: row.get::<_, i64>(7)? != 0,
                 last_date: row
-                    .get::<_, Option<i64>>(7)?
+                    .get::<_, Option<i64>>(8)?
                     .map(|ts| chrono::Utc.timestamp_opt(ts, 0).unwrap()),
-                last_from: row.get(8)?,
-                triage_score: row.get(9)?,
-                labels: serde_json::from_str(&row.get::<_, String>(10).unwrap_or_default())
+                last_from: row.get(9)?,
+                triage_score: row.get(10)?,
+                labels: serde_json::from_str(&row.get::<_, String>(11).unwrap_or_default())
                     .unwrap_or_default(),
                 messages: None,
             })
         };
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let threads = if let Some(mailbox_id) = mailbox_id {
-            let mut params: Vec<&dyn rusqlite::ToSql> =
-                ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-            params.push(&mailbox_id);
-            let rows = stmt.query_map(params.as_slice(), map_thread)?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        } else {
-            let params: Vec<&dyn rusqlite::ToSql> =
-                ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-            let rows = stmt.query_map(params.as_slice(), map_thread)?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        Ok(threads)
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(params.as_slice(), map_thread)?;
+        
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn get_message_attachments(&self, message_id: &str) -> Result<Vec<Attachment>> {
@@ -745,6 +724,37 @@ impl Database {
             "SELECT id, message_id, filename, content_type, size FROM attachments WHERE message_id=?1",
         )?;
         let rows = stmt.query_map([message_id], |row| {
+            Ok(Attachment {
+                id: row.get(0)?,
+                message_id: row.get(1)?,
+                filename: row.get(2)?,
+                content_type: row.get(3)?,
+                size: row.get::<_, i64>(4)? as u32,
+                data: None,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_messages_missing_attachments(&self, mailbox_id: &str) -> Result<Vec<u32>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uid FROM messages 
+             WHERE mailbox_id=?1 AND has_attachments=1
+             AND id NOT IN (SELECT DISTINCT message_id FROM attachments)",
+        )?;
+        let rows = stmt.query_map([mailbox_id], |row| row.get::<_, i64>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).map(|u| u as u32).collect())
+    }
+
+    pub fn get_thread_attachments(&self, thread_id: &str) -> Result<Vec<Attachment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.message_id, a.filename, a.content_type, a.size 
+             FROM attachments a
+             JOIN messages m ON a.message_id = m.id
+             WHERE m.thread_id=?1
+             GROUP BY a.filename, a.size",
+        )?;
+        let rows = stmt.query_map([thread_id], |row| {
             Ok(Attachment {
                 id: row.get(0)?,
                 message_id: row.get(1)?,
@@ -774,6 +784,35 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn upsert_attachment(&self, att: &Attachment) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO attachments (id, message_id, filename, content_type, size, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(message_id, filename, size) DO UPDATE SET
+             id=excluded.id, content_type=excluded.content_type, data=excluded.data",
+            rusqlite::params![
+                att.id,
+                att.message_id,
+                att.filename,
+                att.content_type,
+                att.size as i64,
+                att.data
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_message_attachments(&self, message_id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM attachments WHERE message_id=?1", [message_id])?;
+        Ok(())
+    }
+
+    pub fn delete_all_attachments(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM attachments", [])?;
+        Ok(())
     }
 
     pub fn upsert_thread_embedding(

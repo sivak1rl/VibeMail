@@ -159,5 +159,5 @@ export const useSearchStore = create<SearchStore>((set, get) => ({
     }
   },
 
-  clear: () => set({ query: "", results: [] }),
+  clear: () => set({ query: "", results: [], hasMore: false }),
 }));

@@ -62,6 +62,7 @@ pub struct Thread {
     pub message_count: u32,
     pub unread_count: u32,
     pub is_flagged: bool,
+    pub has_attachments: bool,
     pub last_date: Option<DateTime<Utc>>,
     pub last_from: Option<String>,
     pub triage_score: Option<f64>,
@@ -106,7 +107,7 @@ pub struct ExtractedAction {
     pub priority: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Attachment {
     pub id: String,
     pub message_id: String,

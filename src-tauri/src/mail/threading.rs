@@ -122,6 +122,7 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
         let is_flagged = thread_messages
             .iter()
             .any(|m| m.flags.iter().any(|f| f == "\\Flagged"));
+        let has_attachments = thread_messages.iter().any(|m| m.has_attachments);
 
         let mut participants: Vec<_> = thread_messages
             .iter()
@@ -148,6 +149,7 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
             message_count: count,
             unread_count,
             is_flagged,
+            has_attachments,
             last_date,
             last_from,
             triage_score: thread_messages

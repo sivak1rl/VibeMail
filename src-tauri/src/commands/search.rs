@@ -32,7 +32,7 @@ pub async fn search_messages(
             offset,
         )
         .map_err(|e| e.to_string())?;
-    db.get_threads_by_ids(&thread_ids, request.mailbox_id.as_deref())
+    db.get_threads_by_ids(&thread_ids, None)
         .map_err(|e| e.to_string())
 }
 
@@ -68,13 +68,9 @@ pub async fn search_semantic(
         })?;
 
     tracing::info!("Found {} semantic matches", matches.len());
-    if matches.is_empty() {
-        tracing::warn!("No matches found. Ensure reindexing has completed for account {}", request.account_id);
-    }
-
     let thread_ids: Vec<String> = matches.into_iter().map(|(id, _)| id).collect();
 
-    // 3. Hydrate threads (Global search — ignore mailbox filter for semantic search)
+    // 3. Hydrate threads (Global search)
     let threads = db.get_threads_by_ids(&thread_ids, None)
         .map_err(|e| e.to_string())?;
     

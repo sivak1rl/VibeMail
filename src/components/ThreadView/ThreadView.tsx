@@ -23,8 +23,37 @@ interface AttachmentMetadata {
 
 function AttachmentItem({ att }: { att: AttachmentMetadata }) {
   const [loading, setLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-  const handleOpen = async () => {
+  useEffect(() => {
+    let mounted = true;
+    let localUrl: string | null = null;
+
+    const isImage = att.content_type?.toLowerCase().startsWith("image/");
+    if (isImage) {
+      void (async () => {
+        try {
+          const data = await invoke<number[]>("get_attachment_data", { id: att.id });
+          if (!mounted) return;
+          const blob = new Blob([new Uint8Array(data)], { type: att.content_type || "image/png" });
+          localUrl = URL.createObjectURL(blob);
+          setPreviewUrl(localUrl);
+        } catch (e) {
+          if (mounted) console.error("AttachmentItem: Preview failed", e);
+        }
+      })();
+    }
+
+    return () => {
+      mounted = false;
+      if (localUrl) {
+        try { URL.revokeObjectURL(localUrl); } catch {}
+      }
+    };
+  }, [att.id, att.content_type]);
+
+  const handleOpen = async (e: React.MouseEvent) => {
+    e.stopPropagation();
     setLoading(true);
     try {
       await invoke("open_attachment", { id: att.id });
@@ -39,12 +68,77 @@ function AttachmentItem({ att }: { att: AttachmentMetadata }) {
 
   return (
     <div className={styles.attachment} onClick={handleOpen}>
-      <span className={styles.attIcon}>📄</span>
+      {previewUrl ? (
+        <img src={previewUrl} className={styles.attPreview} alt="" />
+      ) : (
+        <span className={styles.attIcon}>📄</span>
+      )}
       <div className={styles.attInfo}>
-        <span className={styles.attName}>{att.filename}</span>
+        <span className={styles.attName}>{att.filename || "unnamed"}</span>
         <span className={styles.attSize}>{sizeKb} KB</span>
       </div>
       {loading && <span className={styles.attSpinner}>⟳</span>}
+    </div>
+  );
+}
+
+function MessagePreviews({ attachments }: { attachments: AttachmentMetadata[] }) {
+  const [previews, setPreviews] = useState<{ id: string; url: string }[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    const localUrls: string[] = [];
+
+    const load = async () => {
+      if (!Array.isArray(attachments) || attachments.length === 0) {
+        setPreviews([]);
+        return;
+      }
+
+      const images = attachments.filter((a) => a.content_type?.toLowerCase().startsWith("image/"));
+      if (images.length === 0) {
+        setPreviews([]);
+        return;
+      }
+
+      const results: { id: string; url: string }[] = [];
+      for (const img of images) {
+        try {
+          const data = await invoke<number[]>("get_attachment_data", { id: img.id });
+          if (!mounted) break;
+          const blob = new Blob([new Uint8Array(data)], { type: img.content_type || "image/png" });
+          const url = URL.createObjectURL(blob);
+          localUrls.push(url);
+          results.push({ id: img.id, url });
+        } catch (err) {
+          console.error("MessagePreviews: Failed", err);
+        }
+      }
+      
+      if (mounted) {
+        setPreviews(results);
+      }
+    };
+
+    void load();
+
+    return () => {
+      mounted = false;
+      localUrls.forEach((url) => {
+        try { URL.revokeObjectURL(url); } catch {}
+      });
+    };
+  }, [attachments]);
+
+  if (!Array.isArray(previews) || previews.length === 0) return null;
+
+  return (
+    <div className={styles.previewsPane} onClick={(e) => e.stopPropagation()}>
+      {previews.map((p) => (
+        <div key={p.id} className={styles.previewFrame}>
+          <img src={p.url} className={styles.previewImg} alt="Preview" />
+        </div>
+      ))}
     </div>
   );
 }
@@ -96,6 +190,7 @@ function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean 
       </div>
       {open && (
         <div className={styles.messageBody}>
+          <MessagePreviews attachments={attachments} />
           {msg.body_html ? (
             <iframe
               srcDoc={sanitizedHtml}
@@ -115,6 +210,7 @@ function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean 
 
           {attachments.length > 0 && (
             <div className={styles.attachmentList}>
+              <div className={styles.attachmentHeader}>Attachments ({attachments.length})</div>
               {attachments.map((att) => (
                 <AttachmentItem key={att.id} att={att} />
               ))}
@@ -122,6 +218,47 @@ function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean 
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function AttachmentPanel({ threadId }: { threadId: string }) {
+  const [attachments, setAttachments] = useState<AttachmentMetadata[]>([]);
+
+  useEffect(() => {
+    if (!threadId) return;
+    void (async () => {
+      try {
+        const meta = await invoke<AttachmentMetadata[]>("list_thread_attachments", {
+          thread_id: threadId,
+        });
+        
+        // Deduplicate by filename + size + type
+        const unique = new Map<string, AttachmentMetadata>();
+        meta.forEach((att) => {
+          const key = `${att.filename || "unnamed"}-${att.size}-${att.content_type || ""}`;
+          if (!unique.has(key)) {
+            unique.set(key, att);
+          }
+        });
+        
+        setAttachments(Array.from(unique.values()));
+      } catch (e) {
+        console.error("Failed to list thread attachments:", e);
+      }
+    })();
+  }, [threadId]);
+
+  if (attachments.length === 0) return null;
+
+  return (
+    <div className={styles.sideAttachmentPanel}>
+      <div className={styles.sidePanelHeader}>Attachments ({attachments.length})</div>
+      <div className={styles.sideAttachmentList}>
+        {attachments.map((att) => (
+          <AttachmentItem key={att.id} att={att} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -161,95 +298,92 @@ export default function ThreadView({ thread, messages }: Props) {
       className={`${styles.wrapper} ${isExpanded ? styles.expanded : ""}`}
       onClick={() => isExpanded && setIsExpanded(false)}
     >
-      <div
-        className={styles.main}
-        onClick={(e) => isExpanded && e.stopPropagation()}
-      >
-        <div className={styles.toolbar}>
-          <button
-            className={styles.toolbarBtn}
-            onClick={() => archiveThreads([thread.id])}
-            title="Archive"
-          >
-            📥 Archive
-          </button>
-          <button
-            className={styles.toolbarBtn}
-            onClick={() => setThreadsRead([thread.id], isUnread)}
-            title={isUnread ? "Mark as read" : "Mark as unread"}
-          >
-            {isUnread ? "✉ Mark Read" : "📩 Mark Unread"}
-          </button>
-          <button
-            className={`${styles.toolbarBtn} ${isStarred ? styles.toolbarBtnStarActive : ""}`}
-            onClick={() => setThreadsFlagged([thread.id], !isStarred)}
-            title={isStarred ? "Unstar" : "Star"}
-          >
-            {isStarred ? "★ Starred" : "☆ Star"}
-          </button>
-        </div>
-
-        <div className={styles.threadHeader}>
-          <h2 className={styles.subject}>{thread.subject ?? "(no subject)"}</h2>
-          <div className={styles.headerActions}>
+      <div className={styles.card} onClick={(e) => isExpanded && e.stopPropagation()}>
+        <div className={styles.main}>
+          <div className={styles.toolbar}>
             <button
-              className={styles.expandBtn}
-              onClick={() => setIsExpanded(!isExpanded)}
-              title={isExpanded ? "Reduce view" : "Expand to full screen"}
+              className={styles.toolbarBtn}
+              onClick={() => archiveThreads([thread.id])}
+              title="Archive"
             >
-              {isExpanded ? "⤫ Reduce" : "⤢ Expand"}
+              📥 Archive
             </button>
             <button
-              className={styles.replyBtn}
-              onClick={() => setShowCompose(true)}
+              className={styles.toolbarBtn}
+              onClick={() => setThreadsRead([thread.id], isUnread)}
+              title={isUnread ? "Mark as read" : "Mark as unread"}
             >
-              Reply
+              {isUnread ? "✉ Mark Read" : "📩 Mark Unread"}
+            </button>
+            <button
+              className={`${styles.toolbarBtn} ${isStarred ? styles.toolbarBtnStarActive : ""}`}
+              onClick={() => setThreadsFlagged([thread.id], !isStarred)}
+              title={isStarred ? "Unstar" : "Star"}
+            >
+              {isStarred ? "★ Starred" : "☆ Star"}
             </button>
           </div>
-        </div>
 
-        {actions.length > 0 && (
-          <div className={styles.actionsBar}>
-            <span className={styles.actionsLabel}>Actions:</span>
-            {actions.map((a, i) => (
-              <span
-                key={i}
-                className={`${styles.actionChip} ${
-                  a.priority === "high" ? styles.chipHigh : ""
-                }`}
-                title={a.date ?? undefined}
+          <div className={styles.threadHeader}>
+            <h2 className={styles.subject}>{thread.subject ?? "(no subject)"}</h2>
+            <div className={styles.headerActions}>
+              <button
+                className={styles.expandBtn}
+                onClick={() => setIsExpanded(!isExpanded)}
+                title={isExpanded ? "Reduce view" : "Expand to full screen"}
               >
-                {a.kind === "date" ? "📅" : a.kind === "followup" ? "🔔" : "✓"}{" "}
-                {a.text}
-              </span>
+                {isExpanded ? "⤫ Reduce" : "⤢ Expand"}
+              </button>
+              <button
+                className={styles.replyBtn}
+                onClick={() => setShowCompose(true)}
+              >
+                Reply
+              </button>
+            </div>
+          </div>
+
+          {actions.length > 0 && (
+            <div className={styles.actionsBar}>
+              <span className={styles.actionsLabel}>Actions:</span>
+              {actions.map((a, i) => (
+                <span
+                  key={i}
+                  className={`${styles.actionChip} ${
+                    a.priority === "high" ? styles.chipHigh : ""
+                  }`}
+                  title={a.date ?? undefined}
+                >
+                  {a.kind === "date" ? "📅" : a.kind === "followup" ? "🔔" : "✓"}{" "}
+                  {a.text}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className={styles.messages}>
+            {messages.map((msg, i) => (
+              <MessageItem
+                key={msg.id}
+                msg={msg}
+                defaultOpen={i === messages.length - 1}
+              />
             ))}
           </div>
-        )}
 
-        <div className={styles.messages}>
-          {messages.map((msg, i) => (
-            <MessageItem
-              key={msg.id}
-              msg={msg}
-              defaultOpen={i === messages.length - 1}
+          {showCompose && (
+            <Compose
+              thread={thread}
+              messages={messages}
+              onClose={() => setShowCompose(false)}
             />
-          ))}
+          )}
         </div>
 
-        {showCompose && (
-          <Compose
-            thread={thread}
-            messages={messages}
-            onClose={() => setShowCompose(false)}
-          />
-        )}
-      </div>
-
-      <div
-        className={isExpanded ? styles.aiPanelWrapper : ""}
-        onClick={(e) => isExpanded && e.stopPropagation()}
-      >
-        <AIPanel thread={thread} messages={messages} />
+        <div className={styles.sidebarWrapper}>
+          <AIPanel thread={thread} messages={messages} />
+          <AttachmentPanel threadId={thread.id} />
+        </div>
       </div>
     </div>
   );

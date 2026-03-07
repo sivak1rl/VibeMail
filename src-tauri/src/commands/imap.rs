@@ -1,5 +1,6 @@
 use crate::db::{models::*, Database};
 use crate::mail::{imap as mail_imap, sync::SyncManager};
+use crate::mail::imap::format_uid_sequence_set;
 use crate::search::SearchIndex;
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
@@ -229,7 +230,7 @@ async fn do_sync(
 
     {
         let search = search.lock().await;
-        for msg in &messages {
+        for (msg, _) in &messages {
             if let Some(thread_id) = &msg.thread_id {
                 let subject = msg.subject.as_deref().unwrap_or_default();
                 let body = msg.body_text.as_deref().unwrap_or_default();
@@ -360,7 +361,7 @@ pub async fn get_thread(
 ) -> Result<Vec<Message>, String> {
     let db = db.lock().await;
     db.get_thread_messages(&thread_id)
-        .map_err(|e| e.to_string())
+        .map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
@@ -465,7 +466,7 @@ pub async fn set_threads_flagged(
 
     let db = db.lock().await;
     db.set_threads_flagged_state(&thread_ids, request.flagged)
-        .map_err(|e| e.to_string())
+        .map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
@@ -688,38 +689,7 @@ pub async fn set_threads_read(
 
     let db = db.lock().await;
     db.set_threads_read_state(&thread_ids, request.read)
-        .map_err(|e| e.to_string())
-}
-
-fn format_uid_sequence_set(uids: &[u32]) -> String {
-    if uids.is_empty() {
-        return String::new();
-    }
-
-    let mut ranges = Vec::new();
-    let mut start = uids[0];
-    let mut prev = uids[0];
-    for &uid in &uids[1..] {
-        if uid == prev + 1 {
-            prev = uid;
-            continue;
-        }
-        if start == prev {
-            ranges.push(start.to_string());
-        } else {
-            ranges.push(format!("{}:{}", start, prev));
-        }
-        start = uid;
-        prev = uid;
-    }
-
-    if start == prev {
-        ranges.push(start.to_string());
-    } else {
-        ranges.push(format!("{}:{}", start, prev));
-    }
-
-    ranges.join(",")
+        .map_err(|e: anyhow::Error| e.to_string())
 }
 
 #[tauri::command]
@@ -729,6 +699,16 @@ pub async fn list_attachments(
 ) -> Result<Vec<Attachment>, String> {
     let db = db.lock().await;
     db.get_message_attachments(&message_id)
+        .map_err(|e: anyhow::Error| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_thread_attachments(
+    thread_id: String,
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<Vec<Attachment>, String> {
+    let db = db.lock().await;
+    db.get_thread_attachments(&thread_id)
         .map_err(|e: anyhow::Error| e.to_string())
 }
 
@@ -769,6 +749,25 @@ pub async fn open_attachment(id: String, db: State<'_, Arc<Mutex<Database>>>) ->
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn get_attachment_data(
+    id: String,
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<Vec<u8>, String> {
+    let db = db.lock().await;
+    let att = db.get_attachment_by_id(&id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Attachment not found".to_string())?;
+    
+    att.data.ok_or_else(|| "No data for this attachment".to_string())
+}
+
+#[tauri::command]
+pub async fn delete_all_attachments(db: State<'_, Arc<Mutex<Database>>>) -> Result<(), String> {
+    let db = db.lock().await;
+    db.delete_all_attachments().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
