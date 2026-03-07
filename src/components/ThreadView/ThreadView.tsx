@@ -46,8 +46,15 @@ function AttachmentItem({ att }: { att: AttachmentMetadata }) {
 
     return () => {
       mounted = false;
-      if (localUrl) {
-        try { URL.revokeObjectURL(localUrl); } catch {}
+      const urlToRevoke = localUrl;
+      if (urlToRevoke) {
+        setTimeout(() => {
+          try {
+            if (typeof URL !== 'undefined' && URL.revokeObjectURL) {
+              URL.revokeObjectURL(urlToRevoke);
+            }
+          } catch (e) {}
+        }, 0);
       }
     };
   }, [att.id, att.content_type]);
@@ -91,13 +98,13 @@ function MessagePreviews({ attachments }: { attachments: AttachmentMetadata[] })
 
     const load = async () => {
       if (!Array.isArray(attachments) || attachments.length === 0) {
-        setPreviews([]);
+        if (mounted) setPreviews([]);
         return;
       }
 
       const images = attachments.filter((a) => a.content_type?.toLowerCase().startsWith("image/"));
       if (images.length === 0) {
-        setPreviews([]);
+        if (mounted) setPreviews([]);
         return;
       }
 
@@ -106,12 +113,14 @@ function MessagePreviews({ attachments }: { attachments: AttachmentMetadata[] })
         try {
           const data = await invoke<number[]>("get_attachment_data", { id: img.id });
           if (!mounted) break;
-          const blob = new Blob([new Uint8Array(data)], { type: img.content_type || "image/png" });
-          const url = URL.createObjectURL(blob);
-          localUrls.push(url);
-          results.push({ id: img.id, url });
+          if (data && data.length > 0) {
+            const blob = new Blob([new Uint8Array(data)], { type: img.content_type || "image/png" });
+            const url = URL.createObjectURL(blob);
+            localUrls.push(url);
+            results.push({ id: img.id, url });
+          }
         } catch (err) {
-          console.error("MessagePreviews: Failed", err);
+          if (mounted) console.error("MessagePreviews: Failed", err);
         }
       }
       
@@ -124,9 +133,18 @@ function MessagePreviews({ attachments }: { attachments: AttachmentMetadata[] })
 
     return () => {
       mounted = false;
-      localUrls.forEach((url) => {
-        try { URL.revokeObjectURL(url); } catch {}
-      });
+      const urlsToRevoke = [...localUrls];
+      setTimeout(() => {
+        urlsToRevoke.forEach((url) => {
+          try {
+            if (typeof URL !== 'undefined' && URL.revokeObjectURL) {
+               URL.revokeObjectURL(url);
+            }
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+        });
+      }, 0);
     };
   }, [attachments]);
 

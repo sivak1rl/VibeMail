@@ -487,6 +487,7 @@ export default function Inbox({ onSettings }: Props) {
           onToggleSelect={handleToggleSelect}
           loading={loading}
           onLoadMore={handleLoadMore}
+          onRefresh={handleSync}
           hasMore={hasMore}
           query={searchQuery}
         />
