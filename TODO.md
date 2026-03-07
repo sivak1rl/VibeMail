@@ -1,4 +1,4 @@
-# Outlookr — Roadmap & Future Direction
+# VibeMail — Roadmap & Future Direction
 
 ## Current State (MVP)
 
@@ -112,7 +112,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Native OS notifications (new mail, action reminders)
 - [ ] Global keyboard shortcut to open/compose
 - [ ] Auto-start on login (optional)
-- [ ] CLI mode — `outlookr send --to alice@example.com --subject "Hi"`
+- [ ] CLI mode — `vibemail send --to alice@example.com --subject "Hi"`
 - [ ] Headless sync daemon — runs in background, UI optional
 
 ### Plugin / Extension System
@@ -149,4 +149,4 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - **Not a webmail clone** — no browser-based access, desktop-first
 - **Not a calendar app** — may extract events, but no built-in calendar UI
 - **Not a chat app** — email only, no Slack/Teams integration in core
-- **No server component** — fully local, no Outlookr cloud service
+- **No server component** — fully local, no VibeMail cloud service
