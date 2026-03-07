@@ -159,13 +159,13 @@ pub async fn accept_redirect(listener: TcpListener, expected_state: &str) -> Res
 
     // Send success page that auto-closes
     let success_html = r#"<!DOCTYPE html>
-<html><head><title>Outlookr — Connected</title>
+<html><head><title>VibeMail — Connected</title>
 <style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#1a1a1a;color:#e8e8e8;}
 .card{background:#242424;border:1px solid #383838;border-radius:12px;padding:40px;text-align:center;max-width:360px;}
 h2{color:#4f8ef7;margin:0 0 12px;}p{color:#888;margin:0;}</style>
 </head><body><div class="card">
 <h2>&#10003; Connected!</h2>
-<p>You can close this window and return to Outlookr.</p>
+<p>You can close this window and return to VibeMail.</p>
 </div><script>setTimeout(()=>window.close(),2000)</script></body></html>"#;
 
     let _ = send_html_response(&mut stream, 200, success_html).await;
@@ -239,11 +239,7 @@ pub async fn exchange_code(
         params.insert("client_secret", secret_owned.as_str());
     }
 
-    let resp = client
-        .post(token_endpoint)
-        .form(&params)
-        .send()
-        .await?;
+    let resp = client.post(token_endpoint).form(&params).send().await?;
 
     if !resp.status().is_success() {
         let status = resp.status();

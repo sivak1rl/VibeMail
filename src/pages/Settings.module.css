@@ -30,12 +30,48 @@
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
-  max-width: 600px;
+  padding: 32px 64px;
+  scroll-behavior: smooth;
+}
+
+.container {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.sidebar {
+  width: 220px;
+  border-right: 1px solid var(--color-border);
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.navLink {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  text-align: left;
+  font-size: 13px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.navLink:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
 }
 
 .section {
-  margin-bottom: 32px;
+  margin-bottom: 64px;
 }
 
 .sectionTitle {
@@ -76,6 +112,19 @@
 .input:focus, .select:focus { border-color: var(--color-accent); }
 .select { cursor: pointer; }
 
+.textarea {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  padding: 8px 10px;
+  font-size: 13px;
+  outline: none;
+  resize: vertical;
+  min-height: 90px;
+}
+.textarea:focus { border-color: var(--color-accent); }
+
 .checkboxLabel {
   display: flex;
   align-items: center;
@@ -111,6 +160,28 @@
   cursor: pointer;
 }
 .removeBtn:hover { background: rgba(224, 92, 92, 0.1); }
+
+.categoryCard {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.addBtn {
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.addBtn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
 
 .muted { font-size: 13px; color: var(--color-text-muted); }
 

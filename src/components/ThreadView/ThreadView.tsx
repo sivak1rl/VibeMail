@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import DOMPurify from "dompurify";
 import { formatDistanceToNow } from "date-fns";
 import type { Message, Thread } from "../../stores/threads";
+import { useThreadStore } from "../../stores/threads";
 import { useAiStore } from "../../stores/ai";
 import AIPanel from "../AIPanel/AIPanel";
 import Compose from "../Compose/Compose";
@@ -49,7 +50,23 @@ function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean 
 
 export default function ThreadView({ thread, messages }: Props) {
   const [showCompose, setShowCompose] = useState(false);
-  const { actionsByThread } = useAiStore();
+  const [isExpanded, setIsExpanded] = useState(false);
+  const { setThreadsRead, setThreadsFlagged, archiveThreads } = useThreadStore();
+  const { actionsByThread, loadThreadInsights } = useAiStore();
+
+  const isUnread = useMemo(() => {
+    return messages.some((m) => !m.flags.includes("\\Seen"));
+  }, [messages]);
+
+  const isStarred = useMemo(() => {
+    return messages.some((m) => m.flags.includes("\\Flagged"));
+  }, [messages]);
+
+  useEffect(() => {
+    if (!thread) return;
+    void loadThreadInsights(thread.id);
+    setIsExpanded(false); // Reset expansion when switching threads
+  }, [thread, loadThreadInsights]);
 
   if (!thread) {
     return (
@@ -62,11 +79,48 @@ export default function ThreadView({ thread, messages }: Props) {
   const actions = actionsByThread[thread.id] ?? [];
 
   return (
-    <div className={styles.wrapper}>
-      <div className={styles.main}>
+    <div
+      className={`${styles.wrapper} ${isExpanded ? styles.expanded : ""}`}
+      onClick={() => isExpanded && setIsExpanded(false)}
+    >
+      <div
+        className={styles.main}
+        onClick={(e) => isExpanded && e.stopPropagation()}
+      >
+        <div className={styles.toolbar}>
+          <button
+            className={styles.toolbarBtn}
+            onClick={() => archiveThreads([thread.id])}
+            title="Archive"
+          >
+            📥 Archive
+          </button>
+          <button
+            className={styles.toolbarBtn}
+            onClick={() => setThreadsRead([thread.id], isUnread)}
+            title={isUnread ? "Mark as read" : "Mark as unread"}
+          >
+            {isUnread ? "✉ Mark Read" : "📩 Mark Unread"}
+          </button>
+          <button
+            className={`${styles.toolbarBtn} ${isStarred ? styles.toolbarBtnStarActive : ""}`}
+            onClick={() => setThreadsFlagged([thread.id], !isStarred)}
+            title={isStarred ? "Unstar" : "Star"}
+          >
+            {isStarred ? "★ Starred" : "☆ Star"}
+          </button>
+        </div>
+
         <div className={styles.threadHeader}>
           <h2 className={styles.subject}>{thread.subject ?? "(no subject)"}</h2>
           <div className={styles.headerActions}>
+            <button
+              className={styles.expandBtn}
+              onClick={() => setIsExpanded(!isExpanded)}
+              title={isExpanded ? "Reduce view" : "Expand to full screen"}
+            >
+              {isExpanded ? "⤫ Reduce" : "⤢ Expand"}
+            </button>
             <button
               className={styles.replyBtn}
               onClick={() => setShowCompose(true)}
@@ -113,7 +167,12 @@ export default function ThreadView({ thread, messages }: Props) {
         )}
       </div>
 
-      <AIPanel thread={thread} messages={messages} />
+      <div
+        className={isExpanded ? styles.aiPanelWrapper : ""}
+        onClick={(e) => isExpanded && e.stopPropagation()}
+      >
+        <AIPanel thread={thread} messages={messages} />
+      </div>
     </div>
   );
 }

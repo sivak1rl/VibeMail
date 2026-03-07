@@ -58,8 +58,8 @@ pub async fn get_oauth_url(
 ) -> Result<OAuthUrlResponse, String> {
     let account_id = Uuid::new_v4().to_string();
 
-    let config = build_config(&provider, &client_id, client_secret.as_deref())
-        .map_err(|e| e.to_string())?;
+    let config =
+        build_config(&provider, &client_id, client_secret.as_deref()).map_err(|e| e.to_string())?;
 
     let oauth_state = oauth::build_auth_url(&config);
 
@@ -78,13 +78,16 @@ pub async fn get_oauth_url(
     });
 
     // Store all ephemeral OAuth state in memory — no keychain needed for these
-    pending.lock().await.insert(account_id.clone(), OAuthFlow {
-        rx,
-        code_verifier: oauth_state.code_verifier,
-        client_id: client_id.clone(),
-        client_secret: client_secret.clone(),
-        provider: provider.clone(),
-    });
+    pending.lock().await.insert(
+        account_id.clone(),
+        OAuthFlow {
+            rx,
+            code_verifier: oauth_state.code_verifier,
+            client_id: client_id.clone(),
+            client_secret: client_secret.clone(),
+            provider: provider.clone(),
+        },
+    );
 
     Ok(OAuthUrlResponse {
         url: oauth_state.url,
@@ -108,7 +111,8 @@ pub async fn await_oauth_redirect(
         .ok_or("No pending OAuth for this account — call get_oauth_url first")?;
 
     // Wait for the spawned listener task to deliver the callback
-    let callback = flow.rx
+    let callback = flow
+        .rx
         .await
         .map_err(|_| "OAuth listener task was dropped".to_string())?
         .map_err(|e| e)?;
@@ -119,8 +123,8 @@ pub async fn await_oauth_redirect(
     let provider = flow.provider;
 
     // Exchange code for tokens
-    let config = build_config(&provider, &client_id, client_secret.as_deref())
-        .map_err(|e| e.to_string())?;
+    let config =
+        build_config(&provider, &client_id, client_secret.as_deref()).map_err(|e| e.to_string())?;
 
     let tokens = oauth::exchange_code(&config, &callback.code, &code_verifier)
         .await
@@ -129,21 +133,19 @@ pub async fn await_oauth_redirect(
     keychain::store_token(&account_id, "access_token", &tokens.access_token)
         .map_err(|e| e.to_string())?;
     if let Some(refresh) = &tokens.refresh_token {
-        keychain::store_token(&account_id, "refresh_token", refresh)
-            .map_err(|e| e.to_string())?;
+        keychain::store_token(&account_id, "refresh_token", refresh).map_err(|e| e.to_string())?;
     }
     // Persist client credentials for token refresh
-    keychain::store_token(&account_id, "client_id", &client_id)
-        .map_err(|e| e.to_string())?;
+    keychain::store_token(&account_id, "client_id", &client_id).map_err(|e| e.to_string())?;
     if let Some(secret) = &client_secret {
-        keychain::store_token(&account_id, "client_secret", secret)
-            .map_err(|e| e.to_string())?;
+        keychain::store_token(&account_id, "client_secret", secret).map_err(|e| e.to_string())?;
     }
 
     let (imap_host, imap_port, smtp_host, smtp_port) = provider_endpoints(&provider);
 
     // Fetch the user's email address from the provider's userinfo endpoint
-    let email = fetch_user_email(&tokens.access_token, &provider).await
+    let email = fetch_user_email(&tokens.access_token, &provider)
+        .await
         .map_err(|e| e.to_string())?;
 
     let name = email
@@ -193,7 +195,8 @@ pub async fn complete_oauth(
             .map_err(|e| e.to_string())?;
     }
 
-    let email = fetch_user_email(&tokens.access_token, &request.provider).await
+    let email = fetch_user_email(&tokens.access_token, &request.provider)
+        .await
         .unwrap_or_default();
 
     let (imap_host, imap_port, smtp_host, smtp_port) = provider_endpoints(&request.provider);
@@ -231,16 +234,13 @@ pub async fn add_account(
     };
 
     if let Some(password) = &request.password {
-        keychain::store_token(&account.id, "password", password)
-            .map_err(|e| e.to_string())?;
+        keychain::store_token(&account.id, "password", password).map_err(|e| e.to_string())?;
     }
     if let Some(cid) = &request.client_id {
-        keychain::store_token(&account.id, "client_id", cid)
-            .map_err(|e| e.to_string())?;
+        keychain::store_token(&account.id, "client_id", cid).map_err(|e| e.to_string())?;
     }
     if let Some(secret) = &request.client_secret {
-        keychain::store_token(&account.id, "client_secret", secret)
-            .map_err(|e| e.to_string())?;
+        keychain::store_token(&account.id, "client_secret", secret).map_err(|e| e.to_string())?;
     }
 
     let db = db.lock().await;
@@ -249,9 +249,7 @@ pub async fn add_account(
 }
 
 #[tauri::command]
-pub async fn list_accounts(
-    db: State<'_, Arc<Mutex<Database>>>,
-) -> Result<Vec<Account>, String> {
+pub async fn list_accounts(db: State<'_, Arc<Mutex<Database>>>) -> Result<Vec<Account>, String> {
     let db = db.lock().await;
     db.list_accounts().map_err(|e| e.to_string())
 }
@@ -261,7 +259,13 @@ pub async fn remove_account(
     account_id: String,
     db: State<'_, Arc<Mutex<Database>>>,
 ) -> Result<(), String> {
-    for key in &["access_token", "refresh_token", "password", "client_id", "client_secret"] {
+    for key in &[
+        "access_token",
+        "refresh_token",
+        "password",
+        "client_id",
+        "client_secret",
+    ] {
         let _ = keychain::delete_token(&account_id, key);
     }
     let db = db.lock().await;
@@ -284,13 +288,12 @@ fn build_config(
 
 fn provider_endpoints(provider: &str) -> (String, u16, String, u16) {
     match provider {
-        "gmail" => (
-            "imap.gmail.com".into(), 993,
-            "smtp.gmail.com".into(), 587,
-        ),
+        "gmail" => ("imap.gmail.com".into(), 993, "smtp.gmail.com".into(), 587),
         "outlook" => (
-            "outlook.office365.com".into(), 993,
-            "smtp.office365.com".into(), 587,
+            "outlook.office365.com".into(),
+            993,
+            "smtp.office365.com".into(),
+            587,
         ),
         _ => ("localhost".into(), 993, "localhost".into(), 587),
     }

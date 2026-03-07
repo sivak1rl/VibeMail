@@ -1,4 +1,4 @@
-# Outlookr — Roadmap & Future Direction
+# VibeMail — Roadmap & Future Direction
 
 ## Current State (MVP)
 
@@ -9,17 +9,18 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 ## Short Term — Polish the MVP
 
 ### Sync & Reliability
-- [ ] Background auto-sync on a timer (e.g. every 2 minutes)
+- [x] Background auto-sync on a timer (configurable, default 15 minutes)
 - [ ] IMAP IDLE push notifications for real-time new mail
 - [ ] Retry logic with exponential backoff on transient failures
 - [ ] Sync multiple mailboxes (Sent, Drafts, Archive, Trash), not just INBOX
-- [ ] Flag sync — mark read/unread, star/flag changes propagated back to server
+- [x] Flag sync — mark read/unread, star/flag changes propagated back to server
 - [ ] Detect and handle token revocation gracefully (re-prompt OAuth)
 
 ### UI/UX
 - [ ] Keyboard shortcuts (j/k navigation, r reply, a archive, e mark read)
 - [ ] Swipe actions on thread list (archive, delete, snooze)
-- [ ] Unread count badge in sidebar per mailbox
+- [x] Unread count badge in sidebar per mailbox
+- [x] Bulk thread selection (checkboxes + shift-select range)
 - [ ] "Pull to refresh" gesture on thread list
 - [ ] Empty state illustrations (no mail, no search results)
 - [ ] Loading skeleton improvements during sync
@@ -49,8 +50,8 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 ## Medium Term — AI Features
 
 ### Summarization
-- [ ] One-click thread summary (already scaffolded, needs UI wiring)
-- [ ] Batch summarize — summarize all unread threads at once
+- [x] One-click thread summary (already scaffolded, needs UI wiring)
+- [x] Batch summarize — summarize all unread threads at once
 - [ ] Summary caching — store in DB, invalidate when new messages arrive
 - [ ] Configurable summary length (brief / detailed)
 
@@ -69,14 +70,14 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 
 ### Action Extraction
 - [ ] Parse deadlines, meeting times, TODOs from email body
-- [ ] Surface action items in a dedicated panel
+- [x] Surface action items in a dedicated panel
 - [ ] Calendar integration (add extracted events to system calendar)
 - [ ] Task list view — all extracted actions across threads
 
 ### Smart Categorization
-- [ ] Auto-label threads (newsletters, receipts, social, updates)
+- [x] Auto-label threads (newsletters, receipts, social, updates)
 - [ ] Learn from user behavior (what they read vs. archive immediately)
-- [ ] Custom categories with user-provided examples
+- [x] Custom categories with user-provided examples
 
 ---
 
@@ -112,7 +113,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Native OS notifications (new mail, action reminders)
 - [ ] Global keyboard shortcut to open/compose
 - [ ] Auto-start on login (optional)
-- [ ] CLI mode — `outlookr send --to alice@example.com --subject "Hi"`
+- [ ] CLI mode — `vibemail send --to alice@example.com --subject "Hi"`
 - [ ] Headless sync daemon — runs in background, UI optional
 
 ### Plugin / Extension System
@@ -135,7 +136,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] CI pipeline — run `cargo test`, `cargo clippy`, `npx tsc --noEmit` on PR
 - [ ] Replace file-based token store with OS keychain (fix Linux secret-service detection)
 - [ ] Remove unused `StartOAuthRequest` struct
-- [ ] Remove unused `list_mailboxes` function or wire it into UI
+- [x] Remove unused `list_mailboxes` function or wire it into UI
 - [ ] Proper error boundaries in React (catch panics gracefully)
 - [ ] Structured logging with log levels (replace remaining eprintln)
 - [ ] Rate limiting on token refresh (don't refresh on every IMAP connect)
@@ -149,4 +150,4 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - **Not a webmail clone** — no browser-based access, desktop-first
 - **Not a calendar app** — may extract events, but no built-in calendar UI
 - **Not a chat app** — email only, no Slack/Teams integration in core
-- **No server component** — fully local, no Outlookr cloud service
+- **No server component** — fully local, no VibeMail cloud service

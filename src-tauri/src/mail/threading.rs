@@ -1,7 +1,7 @@
 /// JWZ threading algorithm (RFC 5256)
 /// Groups messages into threads based on Message-ID, References, and In-Reply-To headers.
 use crate::db::models::{Message, Thread};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use uuid::Uuid;
 
 struct ThreadNode {
@@ -41,21 +41,25 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
         // Link references chain parent→child
         for i in 0..refs.len() {
             let ref_id = &refs[i];
-            id_table.entry(ref_id.clone()).or_insert_with(|| ThreadNode {
-                message_id: Some(ref_id.clone()),
-                message: None,
-                parent: None,
-                children: Vec::new(),
-            });
-
-            if i + 1 < refs.len() {
-                let child_id = &refs[i + 1];
-                id_table.entry(child_id.clone()).or_insert_with(|| ThreadNode {
-                    message_id: Some(child_id.clone()),
+            id_table
+                .entry(ref_id.clone())
+                .or_insert_with(|| ThreadNode {
+                    message_id: Some(ref_id.clone()),
                     message: None,
                     parent: None,
                     children: Vec::new(),
                 });
+
+            if i + 1 < refs.len() {
+                let child_id = &refs[i + 1];
+                id_table
+                    .entry(child_id.clone())
+                    .or_insert_with(|| ThreadNode {
+                        message_id: Some(child_id.clone()),
+                        message: None,
+                        parent: None,
+                        children: Vec::new(),
+                    });
                 // Only link if child has no parent (avoid cycles)
                 let child_has_parent = id_table[child_id].parent.is_some();
                 if !child_has_parent {
@@ -115,6 +119,9 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
             .iter()
             .filter(|m| !m.flags.iter().any(|f| f == "\\Seen"))
             .count() as u32;
+        let is_flagged = thread_messages
+            .iter()
+            .any(|m| m.flags.iter().any(|f| f == "\\Flagged"));
 
         let mut participants: Vec<_> = thread_messages
             .iter()
@@ -124,6 +131,14 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
         participants.dedup_by(|a, b| a.email == b.email);
 
         let count = thread_messages.len() as u32;
+        let labels = thread_messages
+            .iter()
+            .flat_map(|m| m.flags.iter())
+            .filter_map(|flag| flag.strip_prefix("VibeMail/").map(|s| s.to_string()))
+            .filter(|label| !label.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
 
         threads.push(Thread {
             id: thread_id.clone(),
@@ -132,13 +147,14 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
             participants,
             message_count: count,
             unread_count,
+            is_flagged,
             last_date,
             last_from,
             triage_score: thread_messages
                 .iter()
                 .filter_map(|m| m.triage_score)
                 .reduce(f64::max),
-            labels: Vec::new(),
+            labels,
             messages: Some(thread_messages),
         });
     }

@@ -98,7 +98,7 @@ export default function AccountSetup({ onDone }: Props) {
     <div className={styles.page}>
       <div className={styles.card}>
         <div className={styles.logoRow}>
-          <span className={styles.logo}>Outlookr</span>
+          <span className={styles.logo}>VibeMail</span>
         </div>
         <h1 className={styles.title}>Add your first account</h1>
 

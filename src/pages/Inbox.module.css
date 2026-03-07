@@ -57,12 +57,29 @@
 .accountBtn:hover { background: var(--color-surface2); }
 .accountActive { background: var(--color-surface2) !important; color: var(--color-text) !important; }
 
-.nav { padding: 8px; }
+.nav {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.navHint {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
 
 .navItem {
   width: 100%;
   background: none;
   border: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   text-align: left;
   padding: 8px 10px;
   border-radius: 6px;
@@ -72,6 +89,46 @@
 }
 .navItem:hover { background: var(--color-surface2); color: var(--color-text); }
 .navActive { background: var(--color-surface2) !important; color: var(--color-text) !important; font-weight: 500; }
+
+.navItemVirtual {
+  cursor: default !important;
+  opacity: 0.7;
+}
+.navItemVirtual:hover { background: none !important; color: var(--color-text-muted) !important; }
+
+.navBadge {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(79, 142, 247, 0.14);
+  color: var(--color-accent);
+  font-size: 11px;
+  text-align: center;
+}
+
+.sidebarStatus {
+  margin-top: auto;
+  padding: 12px 16px;
+  border-top: 1px solid var(--color-border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.statusSpinner {
+  font-size: 14px;
+  color: var(--color-accent);
+  animation: spin 1.5s linear infinite;
+}
+
+.statusText {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .listPane {
   width: 320px;
@@ -94,6 +151,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-bottom: 8px;
 }
 
 .focusBtn {
@@ -121,7 +179,42 @@
 }
 .syncBtn:hover { color: var(--color-text); }
 .syncBtn:disabled { animation: spin 1s linear infinite; }
+
+.syncAllBtn {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.syncAllBtn:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.syncAllBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+.batchRow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.batchBtn {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.batchBtn:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.batchBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 
 .syncStatus {
   margin-top: 6px;

@@ -27,7 +27,7 @@ pub fn run() {
         .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("outlookr=info,warn")),
+                .unwrap_or_else(|_| EnvFilter::new("vibemail=info,warn")),
         )
         .init();
 
@@ -42,7 +42,7 @@ pub fn run() {
                 .expect("failed to get app data dir");
             std::fs::create_dir_all(&app_data_dir)?;
 
-            let db_path = app_data_dir.join("outlookr.db");
+            let db_path = app_data_dir.join("vibemail.db");
             let db = db::Database::open(&db_path)?;
             let db = Arc::new(tokio::sync::Mutex::new(db));
 
@@ -50,9 +50,7 @@ pub fn run() {
             let search = search::SearchIndex::open(&search_dir)?;
             let search = Arc::new(tokio::sync::Mutex::new(search));
 
-            let ai_router = Arc::new(tokio::sync::Mutex::new(
-                ai::router::AiRouter::new(db.clone()),
-            ));
+            let ai_router = Arc::new(ai::router::AiRouter::new(db.clone()));
 
             app.manage(db);
             app.manage(search);
@@ -73,19 +71,28 @@ pub fn run() {
             commands::accounts::await_oauth_redirect,
             commands::accounts::complete_oauth,
             commands::imap::sync_account,
+            commands::imap::list_mailboxes,
             commands::imap::list_threads,
             commands::imap::get_thread,
+            commands::imap::get_sync_status,
             commands::imap::mark_read,
+            commands::imap::set_threads_read,
+            commands::imap::set_threads_flagged,
+            commands::imap::archive_threads,
             commands::imap::move_message,
             commands::smtp::send_message,
             commands::ai::summarize_thread,
             commands::ai::draft_reply,
             commands::ai::extract_actions,
             commands::ai::triage_thread,
+            commands::ai::categorize_threads,
             commands::ai::get_ai_config,
+            commands::ai::get_thread_insights,
             commands::ai::set_ai_config,
             commands::search::search_messages,
             commands::search::search_semantic,
+            commands::search::reindex_all_semantic,
+            commands::search::get_reindex_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

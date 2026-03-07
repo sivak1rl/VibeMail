@@ -20,11 +20,14 @@ impl SyncManager {
     }
 
     pub fn start_sync(&mut self, account_id: &str) {
-        let state = self.accounts.entry(account_id.to_string()).or_insert(SyncState {
-            last_sync: None,
-            is_syncing: false,
-            error: None,
-        });
+        let state = self
+            .accounts
+            .entry(account_id.to_string())
+            .or_insert(SyncState {
+                last_sync: None,
+                is_syncing: false,
+                error: None,
+            });
         state.is_syncing = true;
         state.error = None;
     }

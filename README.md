@@ -1,4 +1,4 @@
-# Outlookr — AI-Native Email Client
+# VibeMail — AI-Native Email Client
 
 An intelligent desktop email client built with Tauri 2 (Rust + React) featuring local IMAP/SMTP sync, provider-agnostic AI integration (Ollama + OpenAI-compatible), full-text + semantic search, and automatic email threading.
 
@@ -79,7 +79,7 @@ sudo dnf install \
 
 ```bash
 git clone <your-repo-url>
-cd outlookr
+cd vibemail
 npm install
 ```
 
@@ -109,9 +109,9 @@ npm run tauri build
 ```
 
 Outputs to `src-tauri/target/release/` (binary depends on OS):
-- **macOS**: `Outlookr.app` (dmg installer)
-- **Linux**: `outlookr` (AppImage)
-- **Windows**: `Outlookr.exe` (msi installer)
+- **macOS**: `VibeMail.app` (dmg installer)
+- **Linux**: `vibemail` (AppImage)
+- **Windows**: `VibeMail.exe` (msi installer)
 
 ## Configuration
 
@@ -151,8 +151,8 @@ ollama serve               # Runs on localhost:11434
 ### Token Storage
 
 Credentials are stored in:
-- **macOS/Linux**: `~/.local/share/com.outlookr.app/tokens.json`
-- **Windows**: `%APPDATA%\com.outlookr.app\tokens.json`
+- **macOS/Linux**: `~/.local/share/com.vibemail.app/tokens.json`
+- **Windows**: `%APPDATA%\com.vibemail.app\tokens.json`
 
 Never commit this file. `.gitignore` excludes it by default.
 
@@ -165,7 +165,7 @@ The `.app` bundle is created automatically by `npm run tauri build`. To distribu
 1. **Notarize** (required for macOS 11+):
    ```bash
    xcrun altool --notarize-app \
-     -f Outlookr.dmg \
+     -f VibeMail.dmg \
      -t osx \
      -u <apple-id> \
      -p <app-password>
@@ -173,7 +173,7 @@ The `.app` bundle is created automatically by `npm run tauri build`. To distribu
 
 2. **Create DMG installer** (auto-generated):
    ```bash
-   hdiutil create -volname "Outlookr" -srcfolder "src-tauri/target/release/bundle/dmg" -ov -format UDZO Outlookr.dmg
+   hdiutil create -volname "VibeMail" -srcfolder "src-tauri/target/release/bundle/dmg" -ov -format UDZO VibeMail.dmg
    ```
 
 ### Linux
@@ -181,32 +181,32 @@ The `.app` bundle is created automatically by `npm run tauri build`. To distribu
 **Create AppImage** (single-file portable):
 ```bash
 # Already created by `npm run tauri build`
-# Located at: src-tauri/target/release/bundle/appimage/outlookr_*.AppImage
+# Located at: src-tauri/target/release/bundle/appimage/vibemail_*.AppImage
 
 # Make executable:
-chmod +x outlookr_*.AppImage
+chmod +x vibemail_*.AppImage
 
 # Or install system-wide:
-sudo cp outlookr_*.AppImage /usr/local/bin/outlookr
+sudo cp vibemail_*.AppImage /usr/local/bin/vibemail
 ```
 
 **Create .deb package** (Debian/Ubuntu):
 ```bash
 # Already created by `npm run tauri build`
-# Located at: src-tauri/target/release/bundle/deb/outlookr_*.deb
+# Located at: src-tauri/target/release/bundle/deb/vibemail_*.deb
 
-sudo apt install ./outlookr_*.deb
+sudo apt install ./vibemail_*.deb
 ```
 
 **Manual Desktop Entry** (for custom installation):
 
-Create `~/.local/share/applications/outlookr.desktop`:
+Create `~/.local/share/applications/vibemail.desktop`:
 ```ini
 [Desktop Entry]
-Name=Outlookr
-Exec=/usr/local/bin/outlookr
+Name=VibeMail
+Exec=/usr/local/bin/vibemail
 Type=Application
-Icon=outlookr
+Icon=vibemail
 Categories=Mail;
 ```
 
@@ -214,10 +214,10 @@ Categories=Mail;
 
 The `.msi` installer is auto-generated:
 ```bash
-# Located at: src-tauri/target/release/bundle/msi/Outlookr_*.msi
+# Located at: src-tauri/target/release/bundle/msi/VibeMail_*.msi
 # Double-click to install
 # Or via command line:
-msiexec /i Outlookr_*.msi
+msiexec /i VibeMail_*.msi
 ```
 
 To customize installer:
@@ -230,13 +230,13 @@ After installation, run from terminal:
 
 ```bash
 # macOS/Linux
-/usr/local/bin/outlookr
+/usr/local/bin/vibemail
 
 # Or if in PATH:
-outlookr
+vibemail
 
 # Windows
-Outlookr.exe
+VibeMail.exe
 ```
 
 ## Environment Variables
@@ -245,7 +245,7 @@ Optional env vars (useful for scripting):
 
 ```bash
 # Enable debug logging (Rust backend)
-RUST_LOG=outlookr=debug npm run tauri dev
+RUST_LOG=vibemail=debug npm run tauri dev
 
 # Custom token storage path
 # (Must be set before app starts)
@@ -308,7 +308,7 @@ npm run test
 ## Project Structure
 
 ```
-outlookr/
+vibemail/
 ├── src/                     # React frontend
 │   ├── pages/              # Inbox, Settings, AccountSetup
 │   ├── components/         # UI components (InboxList, ThreadView, etc)

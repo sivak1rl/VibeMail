@@ -13,7 +13,7 @@ fn store() -> &'static Mutex<HashMap<String, String>> {
 
 fn tokens_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".local/share/com.outlookr.app/tokens.json")
+    PathBuf::from(home).join(".local/share/com.vibemail.app/tokens.json")
 }
 
 fn load_from_disk() -> Result<HashMap<String, String>> {

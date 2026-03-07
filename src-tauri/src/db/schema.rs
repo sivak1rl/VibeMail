@@ -3,6 +3,18 @@ use rusqlite::Connection;
 
 pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
+
+    // Manual migrations for schema updates
+    let has_is_flagged: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('threads') WHERE name='is_flagged'",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if has_is_flagged == 0 {
+        conn.execute("ALTER TABLE threads ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+
     Ok(())
 }
 
@@ -65,6 +77,7 @@ CREATE TABLE IF NOT EXISTS threads (
     participant_ids TEXT,                   -- JSON array of email addresses
     message_count   INTEGER NOT NULL DEFAULT 1,
     unread_count    INTEGER NOT NULL DEFAULT 0,
+    is_flagged      INTEGER NOT NULL DEFAULT 0,
     last_date       INTEGER,
     last_from       TEXT,
     triage_score    REAL,
@@ -108,6 +121,21 @@ CREATE TABLE IF NOT EXISTS ai_log (
     completion_tokens INTEGER,
     created_at  INTEGER NOT NULL DEFAULT (unixepoch())
 );
+
+CREATE TABLE IF NOT EXISTS thread_actions (
+    thread_id    TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+    actions_json TEXT NOT NULL,
+    updated_at   INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS thread_embeddings (
+    thread_id    TEXT PRIMARY KEY REFERENCES threads(id) ON DELETE CASCADE,
+    model        TEXT NOT NULL,
+    embedding    BLOB NOT NULL,             -- Float32 array
+    updated_at   INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_model ON thread_embeddings(model);
 
 -- Full-text search
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(

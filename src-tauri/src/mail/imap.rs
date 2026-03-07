@@ -2,9 +2,11 @@ use crate::auth::{keychain, oauth};
 use crate::db::{models::*, Database};
 use crate::mail::{parser, threading};
 use anyhow::{anyhow, Result};
+use async_imap::imap_proto::types::{AttributeValue, Response, Status};
 use async_imap::{types::Flag, Client};
 use async_native_tls::TlsConnector;
 use futures::TryStreamExt;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -44,7 +46,11 @@ pub async fn connect_imap(account: &Account) -> Result<ImapSession> {
         let addrs: Vec<_> = lookup_host(format!("{}:{}", account.imap_host, account.imap_port))
             .await?
             .collect();
-        debug!("Resolved {} to {} addresses", account.imap_host, addrs.len());
+        debug!(
+            "Resolved {} to {} addresses",
+            account.imap_host,
+            addrs.len()
+        );
         addrs
             .iter()
             .find(|a| a.is_ipv4())
@@ -53,12 +59,9 @@ pub async fn connect_imap(account: &Account) -> Result<ImapSession> {
             .ok_or_else(|| anyhow!("DNS resolved no addresses for {}", account.imap_host))?
     };
 
-    let tcp = tokio::time::timeout(
-        Duration::from_secs(15),
-        TcpStream::connect(addr),
-    )
-    .await
-    .map_err(|_| anyhow!("IMAP TCP connect timed out"))??;
+    let tcp = tokio::time::timeout(Duration::from_secs(15), TcpStream::connect(addr))
+        .await
+        .map_err(|_| anyhow!("IMAP TCP connect timed out"))??;
 
     let tls_stream = tokio::time::timeout(
         Duration::from_secs(15),
@@ -80,7 +83,13 @@ pub async fn connect_imap(account: &Account) -> Result<ImapSession> {
             let encoded = oauth::build_xoauth2(&account.email, &access_token);
             tokio::time::timeout(
                 Duration::from_secs(15),
-                client.authenticate("XOAUTH2", XOAuth2 { encoded, sent: false }),
+                client.authenticate(
+                    "XOAUTH2",
+                    XOAuth2 {
+                        encoded,
+                        sent: false,
+                    },
+                ),
             )
             .await
             .map_err(|_| anyhow!("IMAP XOAUTH2 auth timed out"))?
@@ -191,20 +200,27 @@ pub async fn sync_mailbox(
             );
 
             let fetches: Vec<_> = session
-                .uid_fetch(&uid_range, "(RFC822 FLAGS UID)")
+                .uid_fetch(&uid_range, "(BODY.PEEK[] FLAGS UID)")
                 .await?
                 .try_collect()
                 .await?;
+            let gmail_labels = if account.provider == "gmail" {
+                fetch_gmail_vibemail_labels(session, &uid_range).await?
+            } else {
+                HashMap::new()
+            };
 
             cursor = batch_start.saturating_sub(1);
             // Process this batch (continues below via shared parsing code)
-            let batch_messages = parse_fetches(&fetches, account, mailbox);
+            let batch_messages = parse_fetches(&fetches, account, mailbox, &gmail_labels);
             if !batch_messages.is_empty() {
                 persist_batch(&batch_messages, account, mailbox, &db).await?;
             }
             all_messages.extend(batch_messages);
 
-            if cursor < 1 { break; }
+            if cursor < 1 {
+                break;
+            }
         }
     } else {
         // Incremental sync: fetch from last uid_next upward
@@ -217,10 +233,7 @@ pub async fn sync_mailbox(
             let batch_end = (batch_start + batch_size - 1).min(server_uid_next);
             let uid_range = format!("{}:{}", batch_start, batch_end);
 
-            on_progress(&format!(
-                "Fetching new mail… {} so far",
-                all_messages.len()
-            ));
+            on_progress(&format!("Fetching new mail… {} so far", all_messages.len()));
 
             info!(
                 "Fetching UIDs {}..{} from {}/{}",
@@ -228,12 +241,17 @@ pub async fn sync_mailbox(
             );
 
             let fetches: Vec<_> = session
-                .uid_fetch(&uid_range, "(RFC822 FLAGS UID)")
+                .uid_fetch(&uid_range, "(BODY.PEEK[] FLAGS UID)")
                 .await?
                 .try_collect()
                 .await?;
+            let gmail_labels = if account.provider == "gmail" {
+                fetch_gmail_vibemail_labels(session, &uid_range).await?
+            } else {
+                HashMap::new()
+            };
 
-            let batch_messages = parse_fetches(&fetches, account, mailbox);
+            let batch_messages = parse_fetches(&fetches, account, mailbox, &gmail_labels);
             if !batch_messages.is_empty() {
                 persist_batch(&batch_messages, account, mailbox, &db).await?;
             }
@@ -262,6 +280,7 @@ fn parse_fetches(
     fetches: &[async_imap::types::Fetch],
     account: &Account,
     mailbox: &Mailbox,
+    gmail_labels: &HashMap<u32, Vec<String>>,
 ) -> Vec<Message> {
     let mut messages = Vec::new();
     for fetch in fetches {
@@ -273,7 +292,7 @@ fn parse_fetches(
             Some(b) => b,
             None => continue,
         };
-        let msg_id = format!("{}:{}", account.id, uid);
+        let msg_id = format!("{}:{}:{}", account.id, mailbox.id, uid);
         match parser::parse_message(raw, &msg_id, &account.id, &mailbox.id, uid) {
             Ok(mut msg) => {
                 msg.flags = fetch
@@ -281,6 +300,9 @@ fn parse_fetches(
                     .map(|f| flag_to_string(&f))
                     .filter(|s| !s.is_empty())
                     .collect();
+                if let Some(labels) = gmail_labels.get(&uid) {
+                    msg.flags.extend(labels.iter().cloned());
+                }
                 messages.push(msg);
             }
             Err(e) => warn!("Failed to parse uid={}: {}", uid, e),
@@ -310,7 +332,11 @@ async fn persist_batch(
 }
 
 pub async fn list_mailboxes(session: &mut ImapSession, account_id: &str) -> Result<Vec<Mailbox>> {
-    let boxes: Vec<_> = session.list(Some(""), Some("*")).await?.try_collect().await?;
+    let boxes: Vec<_> = session
+        .list(Some(""), Some("*"))
+        .await?
+        .try_collect()
+        .await?;
     let mailboxes = boxes
         .iter()
         .map(|b| Mailbox {
@@ -324,4 +350,62 @@ pub async fn list_mailboxes(session: &mut ImapSession, account_id: &str) -> Resu
         })
         .collect();
     Ok(mailboxes)
+}
+
+async fn fetch_gmail_vibemail_labels(
+    session: &mut ImapSession,
+    uid_range: &str,
+) -> Result<HashMap<u32, Vec<String>>> {
+    let mut labels_by_uid: HashMap<u32, Vec<String>> = HashMap::new();
+    let cmd = format!("UID FETCH {} (UID X-GM-LABELS)", uid_range);
+    let request_id = session.run_command(&cmd).await?;
+
+    loop {
+        let response = session
+            .read_response()
+            .await
+            .ok_or_else(|| anyhow!("IMAP connection lost while fetching Gmail labels"))??;
+        match response.parsed() {
+            Response::Fetch(_, attrs) => {
+                let mut uid: Option<u32> = None;
+                let mut labels = Vec::new();
+                for attr in attrs {
+                    match attr {
+                        AttributeValue::Uid(value) => uid = Some(*value),
+                        AttributeValue::GmailLabels(values) => {
+                            labels.extend(
+                                values
+                                    .iter()
+                                    .map(|value| value.as_ref().to_string())
+                                    .filter_map(parse_vibemail_label),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(uid) = uid {
+                    labels_by_uid.insert(uid, labels);
+                }
+            }
+            Response::Done { tag, status, .. } if tag == &request_id => match status {
+                Status::Ok => break,
+                Status::No | Status::Bad => {
+                    return Err(anyhow!("IMAP UID FETCH X-GM-LABELS failed"));
+                }
+                _ => break,
+            },
+            _ => {}
+        }
+    }
+
+    Ok(labels_by_uid)
+}
+
+fn parse_vibemail_label(raw: String) -> Option<String> {
+    let trimmed = raw.trim_matches('"');
+    let value = trimmed.strip_prefix("VibeMail/")?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_string())
 }

@@ -44,7 +44,10 @@ impl AiRouter {
             "openai_compat" => {
                 let api_key = keychain::get_api_key("byok")?
                     .ok_or_else(|| anyhow!("No API key configured. Add your key in Settings."))?;
-                Ok(Box::new(OpenAICompatProvider::new(&config.base_url, &api_key)))
+                Ok(Box::new(OpenAICompatProvider::new(
+                    &config.base_url,
+                    &api_key,
+                )))
             }
             other => Err(anyhow!("Unknown AI provider: {}", other)),
         }
@@ -91,5 +94,11 @@ impl AiRouter {
             stream: true,
         };
         provider.stream_complete(req).await
+    }
+
+    pub async fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let provider = self.provider_for(&TaskKind::Embed).await?;
+        let model = self.model_for(&TaskKind::Embed).await?;
+        provider.embed(&model, text).await
     }
 }
