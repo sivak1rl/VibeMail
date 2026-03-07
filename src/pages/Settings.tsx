@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { useAiStore, type AiConfig } from "../stores/ai";
 import { useAccountStore } from "../stores/accounts";
+import {
+  usePreferencesStore,
+  type CustomCategoryPreference,
+} from "../stores/preferences";
 import styles from "./Settings.module.css";
 
 interface Props {
@@ -15,6 +19,14 @@ const PROVIDERS = [
 export default function Settings({ onBack }: Props) {
   const { config, loadConfig, saveConfig } = useAiStore();
   const { accounts, removeAccount } = useAccountStore();
+  const {
+    autoSyncIntervalMinutes,
+    setAutoSyncIntervalMinutes,
+    autoLabelNewEmails,
+    setAutoLabelNewEmails,
+    customCategories,
+    setCustomCategories,
+  } = usePreferencesStore();
 
   const [form, setForm] = useState<AiConfig>({
     provider: "ollama",
@@ -29,6 +41,7 @@ export default function Settings({ onBack }: Props) {
   });
   const [apiKey, setApiKey] = useState("");
   const [saved, setSaved] = useState(false);
+  const [customDraft, setCustomDraft] = useState<CustomCategoryPreference[]>([]);
 
   useEffect(() => {
     loadConfig();
@@ -38,8 +51,13 @@ export default function Settings({ onBack }: Props) {
     if (config) setForm(config);
   }, [config]);
 
+  useEffect(() => {
+    setCustomDraft(customCategories);
+  }, [customCategories]);
+
   const handleSave = async () => {
     await saveConfig(form, apiKey || undefined);
+    setCustomCategories(customDraft);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -49,6 +67,15 @@ export default function Settings({ onBack }: Props) {
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
       setForm((f) => ({ ...f, [key]: e.target.value })),
   });
+
+  const updateCategory = (
+    index: number,
+    update: (current: CustomCategoryPreference) => CustomCategoryPreference,
+  ) => {
+    setCustomDraft((current) =>
+      current.map((item, idx) => (idx === index ? update(item) : item)),
+    );
+  };
 
   return (
     <div className={styles.page}>
@@ -156,6 +183,97 @@ export default function Settings({ onBack }: Props) {
             />
             Enable AI features
           </label>
+        </section>
+
+        <section className={styles.section}>
+          <h2 className={styles.sectionTitle}>Sync</h2>
+          <label className={styles.label}>
+            Auto-sync interval (minutes)
+            <input
+              className={styles.input}
+              type="number"
+              min={0}
+              step={1}
+              value={autoSyncIntervalMinutes}
+              onChange={(e) => setAutoSyncIntervalMinutes(Number(e.target.value))}
+            />
+          </label>
+          <p className={styles.muted}>Use 0 to disable background auto-sync.</p>
+
+          <label className={styles.checkboxLabel}>
+            <input
+              type="checkbox"
+              checked={autoLabelNewEmails}
+              onChange={(e) => setAutoLabelNewEmails(e.target.checked)}
+            />
+            Automatically apply category labels after sync (new unread threads)
+          </label>
+        </section>
+
+        <section className={styles.section}>
+          <h2 className={styles.sectionTitle}>Custom Categories</h2>
+          <p className={styles.muted}>
+            Optional categories used during labeling. Name must be unique.
+          </p>
+          {customDraft.map((category, index) => (
+            <div key={`${index}-${category.name}`} className={styles.categoryCard}>
+              <label className={styles.label}>
+                Category name
+                <input
+                  className={styles.input}
+                  type="text"
+                  maxLength={32}
+                  value={category.name}
+                  onChange={(e) =>
+                    updateCategory(index, (current) => ({
+                      ...current,
+                      name: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+              <label className={styles.label}>
+                Examples (one per line)
+                <textarea
+                  className={styles.textarea}
+                  rows={4}
+                  value={category.examples.join("\n")}
+                  onChange={(e) =>
+                    updateCategory(index, (current) => ({
+                      ...current,
+                      examples: e.target.value
+                        .split("\n")
+                        .map((line) => line.trim())
+                        .filter(Boolean)
+                        .slice(0, 6),
+                    }))
+                  }
+                />
+              </label>
+              <button
+                className={styles.removeBtn}
+                onClick={() =>
+                  setCustomDraft((current) =>
+                    current.filter((_, idx) => idx !== index),
+                  )
+                }
+              >
+                Remove Category
+              </button>
+            </div>
+          ))}
+          <button
+            className={styles.addBtn}
+            onClick={() =>
+              setCustomDraft((current) =>
+                current.length >= 12
+                  ? current
+                  : [...current, { name: "", examples: [] }],
+              )
+            }
+          >
+            Add Custom Category
+          </button>
         </section>
 
         <button className={styles.saveBtn} onClick={handleSave}>

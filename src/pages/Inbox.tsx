@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAccountStore } from "../stores/accounts";
 import { useMailboxStore } from "../stores/mailboxes";
 import { useThreadStore } from "../stores/threads";
 import { useSearchStore } from "../stores/search";
 import { useAiStore } from "../stores/ai";
+import { usePreferencesStore } from "../stores/preferences";
 import InboxList from "../components/InboxList/InboxList";
 import ThreadView from "../components/ThreadView/ThreadView";
 import SearchBar from "../components/SearchBar/SearchBar";
@@ -36,16 +37,19 @@ export default function Inbox({ onSettings }: Props) {
     selectThread,
     syncAccount,
     setThreadsRead,
+    applyThreadLabels,
     setFocusMode,
     loadMoreThreads,
     hasMore,
   } = useThreadStore();
   const { results: searchResults, query: searchQuery, clear: clearSearch } = useSearchStore();
-  const { loadConfig, summarizeThreads, batchSummarizing } = useAiStore();
+  const { loadConfig, summarizeThreads, categorizeThreads, batchSummarizing, batchCategorizing } = useAiStore();
+  const { autoLabelNewEmails, customCategories } = usePreferencesStore();
 
   const [showSearch, setShowSearch] = useState(false);
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
   const [lastSelectedThreadId, setLastSelectedThreadId] = useState<string | null>(null);
+  const lastSyncingRef = useRef(false);
 
   useEffect(() => {
     loadConfig();
@@ -102,6 +106,56 @@ export default function Inbox({ onSettings }: Props) {
     .filter((thread) => thread.unread_count > 0)
     .map((thread) => thread.id);
   const shouldMarkRead = selectedThreads.some((thread) => thread.unread_count > 0);
+  const categoryLabels = useMemo(() => {
+    const normalizeCategoryName = (value: string) =>
+      value
+        .toLowerCase()
+        .replace(/[^a-z0-9_\- ]/g, "")
+        .trim()
+        .replace(/\s+/g, "_")
+        .slice(0, 32);
+    return new Set([
+      "newsletter",
+      "receipt",
+      "social",
+      "updates",
+      ...customCategories.map((category) => normalizeCategoryName(category.name)),
+    ]);
+  }, [customCategories]);
+  const allCategoryLabels = useMemo(() => Array.from(categoryLabels), [categoryLabels]);
+
+  useEffect(() => {
+    const wasSyncing = lastSyncingRef.current;
+    lastSyncingRef.current = syncing;
+    if (!autoLabelNewEmails || !wasSyncing || syncing || syncError) return;
+
+    const candidates = threads
+      .filter(
+        (thread) =>
+          thread.unread_count > 0 &&
+          !thread.labels.some((label) => categoryLabels.has(label)),
+      )
+      .map((thread) => thread.id);
+    if (candidates.length === 0) return;
+
+    void (async () => {
+      const results = await categorizeThreads(candidates, customCategories);
+      const labelsByThread = Object.fromEntries(
+        results.map((result) => [result.thread_id, result.label]),
+      );
+      applyThreadLabels(labelsByThread, allCategoryLabels);
+    })();
+  }, [
+    autoLabelNewEmails,
+    syncing,
+    syncError,
+    threads,
+    categorizeThreads,
+    applyThreadLabels,
+    customCategories,
+    allCategoryLabels,
+    categoryLabels,
+  ]);
 
   const handleToggleSelect = useCallback((threadId: string, selected: boolean, withShift: boolean) => {
     const orderedIds = displayedThreads.map((thread) => thread.id);
@@ -144,6 +198,36 @@ export default function Inbox({ onSettings }: Props) {
     if (allUnreadDisplayedIds.length === 0) return;
     await summarizeThreads(allUnreadDisplayedIds);
   }, [allUnreadDisplayedIds, summarizeThreads]);
+
+  const handleCategorizeSelected = useCallback(async () => {
+    if (selectedThreadIds.length === 0) return;
+    const results = await categorizeThreads(selectedThreadIds, customCategories);
+    const labelsByThread = Object.fromEntries(
+      results.map((result) => [result.thread_id, result.label]),
+    );
+    applyThreadLabels(labelsByThread, allCategoryLabels);
+  }, [
+    selectedThreadIds,
+    categorizeThreads,
+    applyThreadLabels,
+    customCategories,
+    allCategoryLabels,
+  ]);
+
+  const handleCategorizeUnread = useCallback(async () => {
+    if (allUnreadDisplayedIds.length === 0) return;
+    const results = await categorizeThreads(allUnreadDisplayedIds, customCategories);
+    const labelsByThread = Object.fromEntries(
+      results.map((result) => [result.thread_id, result.label]),
+    );
+    applyThreadLabels(labelsByThread, allCategoryLabels);
+  }, [
+    allUnreadDisplayedIds,
+    categorizeThreads,
+    applyThreadLabels,
+    customCategories,
+    allCategoryLabels,
+  ]);
 
   const handleToggleRead = useCallback(async () => {
     if (selectedThreadIds.length === 0) return;
@@ -247,6 +331,22 @@ export default function Inbox({ onSettings }: Props) {
               title="Summarize all unread threads"
             >
               Summarize Unread ({allUnreadDisplayedIds.length})
+            </button>
+            <button
+              className={styles.batchBtn}
+              onClick={handleCategorizeSelected}
+              disabled={selectedThreadIds.length === 0 || batchCategorizing}
+              title="Apply category labels to selected threads"
+            >
+              {batchCategorizing ? "Labeling…" : `Label Selected (${selectedThreadIds.length})`}
+            </button>
+            <button
+              className={styles.batchBtn}
+              onClick={handleCategorizeUnread}
+              disabled={allUnreadDisplayedIds.length === 0 || batchCategorizing}
+              title="Apply category labels to all unread threads"
+            >
+              Label Unread ({allUnreadDisplayedIds.length})
             </button>
             <button
               className={styles.batchBtn}

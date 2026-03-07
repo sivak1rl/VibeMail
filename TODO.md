@@ -9,7 +9,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 ## Short Term — Polish the MVP
 
 ### Sync & Reliability
-- [ ] Background auto-sync on a timer (e.g. every 2 minutes)
+- [x] Background auto-sync on a timer (configurable, default 15 minutes)
 - [ ] IMAP IDLE push notifications for real-time new mail
 - [ ] Retry logic with exponential backoff on transient failures
 - [ ] Sync multiple mailboxes (Sent, Drafts, Archive, Trash), not just INBOX
@@ -75,9 +75,9 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Task list view — all extracted actions across threads
 
 ### Smart Categorization
-- [ ] Auto-label threads (newsletters, receipts, social, updates)
+- [x] Auto-label threads (newsletters, receipts, social, updates)
 - [ ] Learn from user behavior (what they read vs. archive immediately)
-- [ ] Custom categories with user-provided examples
+- [x] Custom categories with user-provided examples
 
 ---
 

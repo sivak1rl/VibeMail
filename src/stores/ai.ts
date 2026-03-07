@@ -26,6 +26,16 @@ export interface TriageResult {
   score: number;
 }
 
+export interface CategorizeThreadResult {
+  thread_id: string;
+  label: string;
+}
+
+export interface CustomCategory {
+  name: string;
+  examples: string[];
+}
+
 interface AiState {
   config: AiConfig | null;
   summaryByThread: Record<string, string>;
@@ -35,11 +45,16 @@ interface AiState {
   actionsByThread: Record<string, ExtractedAction[]>;
   configLoaded: boolean;
   batchSummarizing: boolean;
+  batchCategorizing: boolean;
 
   loadConfig: () => Promise<void>;
   saveConfig: (config: AiConfig, apiKey?: string) => Promise<void>;
   summarizeThread: (threadId: string) => Promise<void>;
   summarizeThreads: (threadIds: string[]) => Promise<void>;
+  categorizeThreads: (
+    threadIds: string[],
+    customCategories?: CustomCategory[],
+  ) => Promise<CategorizeThreadResult[]>;
   draftReply: (threadId: string) => Promise<string>;
   extractActions: (threadId: string) => Promise<ExtractedAction[]>;
   triageThread: (threadId: string) => Promise<TriageResult>;
@@ -54,6 +69,7 @@ export const useAiStore = create<AiState>((set, get) => ({
   actionsByThread: {},
   configLoaded: false,
   batchSummarizing: false,
+  batchCategorizing: false,
 
   loadConfig: async () => {
     try {
@@ -120,6 +136,22 @@ export const useAiStore = create<AiState>((set, get) => ({
       }
     } finally {
       set({ batchSummarizing: false });
+    }
+  },
+
+  categorizeThreads: async (threadIds, customCategories) => {
+    const ids = [...new Set(threadIds)].filter(Boolean);
+    if (ids.length === 0) return [];
+    set({ batchCategorizing: true });
+    try {
+      return await invoke<CategorizeThreadResult[]>("categorize_threads", {
+        request: {
+          thread_ids: ids,
+          custom_categories: customCategories ?? [],
+        },
+      });
+    } finally {
+      set({ batchCategorizing: false });
     }
   },
 

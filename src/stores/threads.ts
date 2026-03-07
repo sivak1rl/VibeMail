@@ -65,6 +65,10 @@ interface ThreadStore {
   selectThread: (threadId: string) => Promise<void>;
   syncAccount: (accountId: string, mailboxId?: string | null) => Promise<SyncResult>;
   setThreadsRead: (threadIds: string[], read: boolean) => Promise<void>;
+  applyThreadLabels: (
+    labelsByThread: Record<string, string>,
+    knownCategoryLabels?: string[],
+  ) => void;
   setFocusMode: (v: boolean) => void;
 }
 
@@ -258,6 +262,25 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
         : state.threadMessages;
 
       return { threads, threadMessages };
+    });
+  },
+
+  applyThreadLabels: (labelsByThread, knownCategoryLabels = []) => {
+    set((state) => {
+      const categoryLabels = new Set([
+        "newsletter",
+        "receipt",
+        "social",
+        "updates",
+        ...knownCategoryLabels,
+      ]);
+      const threads = state.threads.map((thread) => {
+        const nextCategory = labelsByThread[thread.id];
+        if (!nextCategory) return thread;
+        const baseLabels = thread.labels.filter((label) => !categoryLabels.has(label));
+        return { ...thread, labels: [...baseLabels, nextCategory] };
+      });
+      return { threads };
     });
   },
 

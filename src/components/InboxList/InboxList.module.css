@@ -99,6 +99,16 @@
   color: var(--color-text-muted);
 }
 
+.category {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--color-accent);
+  border: 1px solid rgba(79, 142, 247, 0.4);
+  border-radius: 10px;
+  padding: 1px 6px;
+}
+
 .skeleton {
   height: 68px;
   margin: 1px 0;

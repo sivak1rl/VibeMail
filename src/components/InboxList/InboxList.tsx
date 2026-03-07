@@ -34,6 +34,21 @@ function formatDate(dateStr: string | null) {
   }
 }
 
+function categoryLabel(labels: string[]): string | null {
+  for (const label of labels) {
+    if (label === "newsletter") return "Newsletter";
+    if (label === "receipt") return "Receipt";
+    if (label === "social") return "Social";
+    if (label === "updates") return "Updates";
+    if (label.trim().length > 0) {
+      return label
+        .replace(/[_-]+/g, " ")
+        .replace(/\b\w/g, (ch) => ch.toUpperCase());
+    }
+  }
+  return null;
+}
+
 export default function InboxList({
   threads,
   selectedId,
@@ -89,6 +104,7 @@ export default function InboxList({
         const isChecked = selectedSet.has(thread.id);
         const senderDisplay =
           thread.last_from ?? thread.participants[0]?.email ?? "Unknown";
+        const category = categoryLabel(thread.labels);
 
         return (
           <div
@@ -124,6 +140,7 @@ export default function InboxList({
             </div>
             <div className={styles.itemBot}>
               <TriageDot score={thread.triage_score} />
+              {category && <span className={styles.category}>{category}</span>}
               {thread.message_count > 1 && (
                 <span className={styles.count}>{thread.message_count}</span>
               )}

@@ -402,6 +402,14 @@ impl Database {
         Ok(())
     }
 
+    pub fn update_thread_labels(&self, thread_id: &str, labels: &[String]) -> Result<()> {
+        self.conn.execute(
+            "UPDATE threads SET labels=?1, updated_at=unixepoch() WHERE id=?2",
+            rusqlite::params![serde_json::to_string(labels)?, thread_id],
+        )?;
+        Ok(())
+    }
+
     pub fn set_thread_read_state(&self, thread_id: &str, read: bool) -> Result<()> {
         let mut stmt = self
             .conn

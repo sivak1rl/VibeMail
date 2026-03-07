@@ -84,6 +84,7 @@ pub fn run() {
             commands::ai::draft_reply,
             commands::ai::extract_actions,
             commands::ai::triage_thread,
+            commands::ai::categorize_threads,
             commands::ai::get_ai_config,
             commands::ai::set_ai_config,
             commands::search::search_messages,
