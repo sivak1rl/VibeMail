@@ -38,6 +38,8 @@ You can specify different models for different tasks to balance speed and qualit
 ## 4. Sync & Automation
 - **Auto-sync interval**: How often (in minutes) the app should poll your IMAP server for new messages. Set to `0` to disable background syncing.
 - **Auto-labeling**: If enabled, VibeMail will automatically run the "Triage" AI task on every new unread thread immediately after a sync completes.
+- **History fetch duration (days)**: Configures how far back the app looks when you request "older emails" (default 30).
+- **Max emails to download**: Limits the number of messages fetched in a single history request to prevent backend throttling.
 
 ---
 
@@ -49,7 +51,15 @@ You can define up to 12 custom categories to help the AI organize your inbox.
 
 ---
 
-## 6. Technical Details: How settings are stored
+## 6. Danger Zone
+Located at the bottom of the Settings page for critical maintenance tasks.
+- **Wipe All Local Data**: Deletes all local messages, threads, mailboxes, and AI indices. This is useful for clearing cache or starting fresh.
+- **Reset Database Schema**: An optional step during a wipe that completely drops and recreates the SQLite tables. Recommended if you encounter "ON CONFLICT" or schema-related errors.
+- **Preservation**: Note that account credentials are **not** removed during a wipe, but automatic syncing is disabled for safety.
+
+---
+
+## 7. Technical Details: How settings are stored
 - **AI Config**: Stored in the `ai_config` table in the local SQLite database.
 - **User Preferences**: (Sync interval, labels, etc.) are stored in the browser's `localStorage` via the `zustand` store.
 - **Sensitive Data**: API keys and OAuth refresh tokens are stored in the **System Keychain** using the Rust `keyring` crate.

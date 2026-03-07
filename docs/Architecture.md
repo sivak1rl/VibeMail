@@ -6,10 +6,10 @@ VibeMail follows the **Tauri 2** architecture, splitting responsibilities betwee
 The core logic resides in `src-tauri/src/`.
 
 ### Modules
-- **`mail/`**: Handles the IMAP protocol, MIME parsing, and SMTP sending.
-- **`db/`**: A SQLite database (via `rusqlite`) stores account configurations, message metadata, and AI settings.
-- **`ai/`**: A provider-agnostic router that handles local (Ollama) and remote (OpenAI) LLM requests.
-- **`search/`**: Full-text and semantic indexing using the **Tantivy** engine.
+- **`mail/`**: Handles the IMAP protocol, MIME parsing, and SMTP sending. Includes the `SyncManager` for coordinating concurrent background tasks.
+- **`db/`**: A SQLite database (via `rusqlite`) stores account configurations, message metadata, and AI settings. Supports automated schema migrations.
+- **`ai/`**: A provider-agnostic router that handles local (Ollama) and remote (OpenAI) LLM requests, including vector embeddings for search.
+- **`search/`**: Hybrid search using **Tantivy** for keywords and manual cosine similarity for semantic matches.
 - **`auth/`**: Manages OAuth2 PKCE flows and secure token storage in the system keychain.
 
 ## The Frontend (React)

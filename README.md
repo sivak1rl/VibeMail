@@ -4,34 +4,44 @@ An intelligent desktop email client built with Tauri 2 (Rust + React) featuring 
 
 ## Features
 
-- **Multi-account IMAP/SMTP**: Gmail, Outlook, and generic IMAP servers with OAuth2 PKCE or password auth
-- **OAuth2 PKCE Flow**: Seamless Gmail/Outlook authentication with automatic token refresh
+- **Multi-account IMAP/SMTP**: Gmail, Outlook, and generic IMAP servers with OAuth2 PKCE or password auth.
+- **Background Synchronization**: 
+  - Non-blocking sync runs in the background.
+  - Real-time progress indicators in the sidebar.
+  - "Sliding Window" sync: only fetches mail since your last successful update.
+- **Advanced Search**:
+  - **Keyword Search**: Powered by SQLite FTS5.
+  - **Semantic Search**: Meaning-based search using vector embeddings (Ollama/OpenAI).
+  - **History & Filters**: Persistent search history and Gmail-style filters (`from:`, `is:unread`, etc.).
 - **AI-Powered Insights**:
-  - Thread summarization
-  - Draft smart replies
-  - Extract actionable items
-  - Triage scoring for email importance
-- **Flexible AI Backends**: Local Ollama (default) or bring-your-own OpenAI-compatible endpoint
-- **Full-Text + Semantic Search**: FTS5 keyword search + Tantivy vector indexing
-- **Smart Threading**: JWZ algorithm groups conversations by Message-ID/References
-- **Graduated Sync**: Initial fetch loads newest emails first in batches (10→25→50→100→200→500)
-- **Dark Theme UI**: Modern React + CSS Modules with infinite scroll
+  - Intelligent thread summarization.
+  - Smart reply drafting.
+  - Action item extraction and triage scoring.
+  - **Intelligent Labeling**: Automatic categorization that avoids redundant processing.
+- **Robust Attachment Handling**:
+  - Unified attachment sidebar for entire threads.
+  - One-click "Open" in system-default applications.
+  - Image previews and thumbnails.
+- **Modern Responsive UI**: 
+  - Collapsible sidebar and adaptive layout for different window sizes.
+  - Lightbox-style focused email view.
+  - Loading skeletons and "Pull to Refresh" support.
+- **Danger Zone**: Wipe local cache and reset database schemas without losing account credentials.
 
 ## Architecture
 
 ```
 Tauri 2 (Desktop Shell)
 ├── Rust Backend (src-tauri/src/)
-│   ├── IMAP: async-imap 0.10 with tokio async runtime
-│   ├── SMTP: lettre 0.11 for message sending
-│   ├── DB: SQLite with WAL + FTS5 virtual tables
-│   ├── Search: Tantivy 0.22 full-text index
-│   ├── Auth: OAuth PKCE with local HTTP redirect listener
-│   └── AI: Provider trait with Ollama + OpenAI-compatible
+│   ├── IMAP: async-imap with non-blocking background tasks
+│   ├── DB: SQLite with automated schema migrations
+│   ├── Search: Tantivy full-text + Manual vector similarity
+│   ├── AI: Router supporting Task-specific models and providers
+│   └── OS Integration: Native keychain for tokens and file openers for attachments
 └── React Frontend (src/)
-    ├── Zustand stores (accounts, threads, AI, search)
-    ├── CSS Modules (dark theme)
-    └── Tauri IPC commands for all operations
+    ├── State: Zustand with persistent storage
+    ├── UI: React 18 with Error Boundaries and CSS Modules
+    └── Transitions: Smooth animations for Lightbox and Sidebar
 ```
 
 ## Build Requirements
