@@ -22,6 +22,7 @@ pub struct Mailbox {
     pub flags: Vec<String>,
     pub uid_validity: Option<u32>,
     pub uid_next: Option<u32>,
+    pub last_synced_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

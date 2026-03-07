@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, Component, ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAccountStore } from "../stores/accounts";
 import { useMailboxStore } from "../stores/mailboxes";
 import { useThreadStore } from "../stores/threads";
@@ -11,35 +11,6 @@ import ThreadView from "../components/ThreadView/ThreadView";
 import SearchBar from "../components/SearchBar/SearchBar";
 import styles from "./Inbox.module.css";
 import { invoke } from "@tauri-apps/api/core";
-
-class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
-  constructor(props: { children: ReactNode }) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-  static getDerivedStateFromError(error: Error) {
-    return { hasError: true, error };
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{ padding: "40px", color: "#ff6b6b", background: "#1a1a1a", height: "100%" }}>
-          <h2>Something went wrong in the view.</h2>
-          <pre style={{ fontSize: "12px", marginTop: "20px", whiteSpace: "pre-wrap" }}>
-            {this.state.error?.stack}
-          </pre>
-          <button 
-            onClick={() => this.setState({ hasError: false })}
-            style={{ marginTop: "20px", padding: "8px 16px", cursor: "pointer" }}
-          >
-            Try Refreshing View
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
 
 interface Props {
   onSettings: () => void;
@@ -71,6 +42,7 @@ export default function Inbox({ onSettings }: Props) {
     applyThreadLabels,
     setFocusMode,
     loadMoreThreads,
+    fetchHistory,
     hasMore,
   } = useThreadStore();
   const { results: searchResults, query: searchQuery, clear: clearSearch } = useSearchStore();
@@ -93,21 +65,37 @@ export default function Inbox({ onSettings }: Props) {
       setSelectedThreadIds([]);
       setLastSelectedThreadId(null);
       clearSearch();
-      void (async () => {
-        await fetchMailboxes(activeAccountId);
-        const initialMailboxId = useMailboxStore.getState().selectedMailboxId;
+      
+      const initBackgroundTasks = async () => {
+        try {
+          await fetchMailboxes(activeAccountId);
+          
+          const mailboxStore = useMailboxStore.getState();
+          const initialMailboxId = mailboxStore?.selectedMailboxId || null;
 
-        // Check background tasks
-        const isSyncing = await invoke<boolean>("get_sync_status", { accountId: activeAccountId });
-        if (isSyncing) void syncAccount(activeAccountId, initialMailboxId);
-        else {
-          await syncAccount(activeAccountId, initialMailboxId);
-          await fetchMailboxes(activeAccountId, true);
+          // Check background sync
+          const isSyncing = await invoke<boolean>("get_sync_status", { accountId: activeAccountId });
+          if (isSyncing) {
+            void syncAccount(activeAccountId, initialMailboxId);
+          } else {
+            await syncAccount(activeAccountId, initialMailboxId);
+            await fetchMailboxes(activeAccountId, true);
+          }
+
+          // Check background reindex
+          const isReindexing = await invoke<boolean>("get_reindex_status", { accountId: activeAccountId });
+          if (isReindexing) {
+            const searchStore = useSearchStore.getState();
+            if (searchStore?.reindexAll) {
+              void searchStore.reindexAll(activeAccountId, false);
+            }
+          }
+        } catch (err) {
+          console.error("Inbox: Failed to initialize background tasks", err);
         }
+      };
 
-        const isReindexing = await invoke<boolean>("get_reindex_status", { accountId: activeAccountId });
-        if (isReindexing) void useSearchStore.getState().reindexAll(activeAccountId, false);
-      })();
+      void initBackgroundTasks();
     }
   }, [activeAccountId, clearSearch, fetchMailboxes, syncAccount]);
 
@@ -133,12 +121,21 @@ export default function Inbox({ onSettings }: Props) {
     void fetchThreads(activeAccountId, selectedMailboxId, focusMode);
   }, [activeAccountId, fetchMailboxes, syncAccount, fetchThreads, selectedMailboxId, focusMode]);
 
+  const handleFetchHistory = useCallback(async () => {
+    if (!activeAccountId || !selectedMailboxId) return;
+    await fetchHistory(activeAccountId, selectedMailboxId);
+  }, [activeAccountId, selectedMailboxId, fetchHistory]);
+
   const handleLoadMore = useCallback(() => {
     if (!activeAccountId) return;
+    const currentMailboxId = selectedMailboxId || null;
     if (showSearch) {
-      void useSearchStore.getState().loadMore(activeAccountId, selectedMailboxId);
+      const searchStore = useSearchStore.getState();
+      if (searchStore?.loadMore) {
+        void searchStore.loadMore(activeAccountId, currentMailboxId);
+      }
     } else {
-      loadMoreThreads(activeAccountId, selectedMailboxId);
+      loadMoreThreads(activeAccountId, currentMailboxId);
     }
   }, [activeAccountId, selectedMailboxId, loadMoreThreads, showSearch]);
 
@@ -150,7 +147,7 @@ export default function Inbox({ onSettings }: Props) {
     clearSearch();
   }, [clearSearch, selectMailbox]);
 
-  const displayedThreads = showSearch && searchQuery ? searchResults : threads;
+  const displayedThreads = (showSearch && searchQuery ? searchResults : threads) || [];
   const selectedThread = displayedThreads.find((t) => t.id === selectedThreadId) ?? null;
 
   useEffect(() => {
@@ -163,12 +160,12 @@ export default function Inbox({ onSettings }: Props) {
     }
   }, [selectedThreadId, selectedThread, displayedThreads]);
   const selectedSet = new Set(selectedThreadIds);
-  const selectedThreads = displayedThreads.filter((thread) => selectedSet.has(thread.id));
-  const selectedUnreadThreads = selectedThreads.filter((thread) => thread.unread_count > 0);
+  const selectedThreads = displayedThreads.filter((thread) => thread && selectedSet.has(thread.id));
+  const selectedUnreadThreads = selectedThreads.filter((thread) => thread && thread.unread_count > 0);
   const allUnreadDisplayedIds = displayedThreads
-    .filter((thread) => thread.unread_count > 0)
+    .filter((thread) => thread && thread.unread_count > 0)
     .map((thread) => thread.id);
-  const shouldMarkRead = selectedThreads.some((thread) => thread.unread_count > 0);
+  const shouldMarkRead = selectedThreads.some((thread) => thread && thread.unread_count > 0);
   const categoryLabels = useMemo(() => {
     const normalizeCategoryName = (value: string) =>
       value
@@ -488,6 +485,7 @@ export default function Inbox({ onSettings }: Props) {
           loading={loading}
           onLoadMore={handleLoadMore}
           onRefresh={handleSync}
+          onFetchHistory={handleFetchHistory}
           hasMore={hasMore}
           query={searchQuery}
         />
@@ -495,9 +493,7 @@ export default function Inbox({ onSettings }: Props) {
 
       {/* Thread view */}
       <div className={styles.threadPane}>
-        <ErrorBoundary>
-          <ThreadView thread={selectedThread} messages={threadMessages} />
-        </ErrorBoundary>
+        <ThreadView thread={selectedThread} messages={threadMessages} />
       </div>
     </div>
   );

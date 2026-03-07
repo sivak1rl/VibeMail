@@ -1,6 +1,6 @@
 use crate::db::{models::*, Database};
 use anyhow::Result;
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde_json;
 
 #[derive(Debug, Clone)]
@@ -64,15 +64,17 @@ impl Database {
 
     pub fn upsert_mailbox(&self, mailbox: &Mailbox) -> Result<()> {
         self.conn.execute(
-            r#"INSERT INTO mailboxes (id, account_id, name, delimiter, flags, uid_validity, uid_next)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            r#"INSERT INTO mailboxes (id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                ON CONFLICT(account_id, name) DO UPDATE SET
-               flags=excluded.flags, uid_validity=excluded.uid_validity, uid_next=excluded.uid_next"#,
+               flags=excluded.flags, uid_validity=excluded.uid_validity, uid_next=excluded.uid_next,
+               last_synced_at=excluded.last_synced_at"#,
             rusqlite::params![
                 mailbox.id, mailbox.account_id, mailbox.name, mailbox.delimiter,
                 serde_json::to_string(&mailbox.flags)?,
                 mailbox.uid_validity.map(|v| v as i64),
                 mailbox.uid_next.map(|v| v as i64),
+                mailbox.last_synced_at.map(|d| d.timestamp()),
             ],
         )?;
         Ok(())
@@ -80,7 +82,7 @@ impl Database {
 
     pub fn get_mailbox_by_name(&self, account_id: &str, name: &str) -> Result<Option<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next
+            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at
              FROM mailboxes WHERE account_id=?1 AND name=?2",
         )?;
         let mut rows = stmt.query(rusqlite::params![account_id, name])?;
@@ -93,6 +95,9 @@ impl Database {
                 flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
                 uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                 uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                last_synced_at: row
+                    .get::<_, Option<i64>>(7)?
+                    .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
             }))
         } else {
             Ok(None)
@@ -101,7 +106,7 @@ impl Database {
 
     pub fn list_mailboxes(&self, account_id: &str) -> Result<Vec<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next
+            r#"SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at
                FROM mailboxes
                WHERE account_id=?1
                ORDER BY CASE WHEN UPPER(name) = 'INBOX' THEN 0 ELSE 1 END, name COLLATE NOCASE"#,
@@ -116,6 +121,9 @@ impl Database {
                     flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
                     uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                     uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                    last_synced_at: row
+                        .get::<_, Option<i64>>(7)?
+                        .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -124,7 +132,7 @@ impl Database {
 
     pub fn list_mailboxes_with_counts(&self, account_id: &str) -> Result<Vec<MailboxStats>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next,
+            r#"SELECT mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next, mb.last_synced_at,
                COUNT(DISTINCT m.thread_id) AS thread_count,
                COUNT(DISTINCT CASE
                  WHEN m.thread_id IS NOT NULL
@@ -134,7 +142,7 @@ impl Database {
                FROM mailboxes mb
                LEFT JOIN messages m ON m.mailbox_id = mb.id
                WHERE mb.account_id=?1
-               GROUP BY mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next
+               GROUP BY mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next, mb.last_synced_at
                ORDER BY CASE WHEN UPPER(mb.name) = 'INBOX' THEN 0 ELSE 1 END, mb.name COLLATE NOCASE"#,
         )?;
         let mailboxes = stmt
@@ -148,9 +156,12 @@ impl Database {
                         flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
                         uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                         uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                        last_synced_at: row
+                            .get::<_, Option<i64>>(7)?
+                            .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
                     },
-                    thread_count: row.get::<_, i64>(7)? as u32,
-                    unread_count: row.get::<_, i64>(8)? as u32,
+                    thread_count: row.get::<_, i64>(8)? as u32,
+                    unread_count: row.get::<_, i64>(9)? as u32,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -159,7 +170,7 @@ impl Database {
 
     pub fn get_mailbox_by_id(&self, account_id: &str, mailbox_id: &str) -> Result<Option<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next
+            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at
              FROM mailboxes WHERE account_id=?1 AND id=?2",
         )?;
         let mut rows = stmt.query(rusqlite::params![account_id, mailbox_id])?;
@@ -172,10 +183,21 @@ impl Database {
                 flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
                 uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                 uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                last_synced_at: row
+                    .get::<_, Option<i64>>(7)?
+                    .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
             }))
         } else {
             Ok(None)
         }
+    }
+
+    pub fn get_mailbox_oldest_date(&self, mailbox_id: &str) -> Result<Option<DateTime<Utc>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT MIN(date) FROM messages WHERE mailbox_id=?1",
+        )?;
+        let date: Option<i64> = stmt.query_row([mailbox_id], |row| row.get(0))?;
+        Ok(date.map(|ts| Utc.timestamp_opt(ts, 0).unwrap()))
     }
 
     pub fn upsert_message(&self, msg: &Message) -> Result<()> {

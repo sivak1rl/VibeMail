@@ -2,6 +2,7 @@ use crate::db::{models::*, Database};
 use crate::mail::{imap as mail_imap, sync::SyncManager};
 use crate::mail::imap::format_uid_sequence_set;
 use crate::search::SearchIndex;
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
@@ -21,6 +22,135 @@ pub struct SyncResult {
 pub struct SyncAccountRequest {
     pub account_id: String,
     pub mailbox_id: Option<String>,
+    pub days: Option<u32>,
+}
+
+#[tauri::command]
+pub async fn fetch_history(
+    request: SyncAccountRequest,
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<Database>>>,
+    search: State<'_, Arc<Mutex<SearchIndex>>>,
+    sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
+) -> Result<SyncResult, String> {
+    let account_id = request.account_id.clone();
+    let mailbox_id = request.mailbox_id.clone();
+    let days = request.days.unwrap_or(30);
+
+    {
+        let mut mgr: tokio::sync::MutexGuard<'_, SyncManager> = sync_mgr.lock().await;
+        let key = if let Some(mid) = &mailbox_id { format!("history:{}:{}", account_id, mid) } else { format!("history:{}", account_id) };
+        if mgr.is_syncing(&key) {
+            return Ok(SyncResult {
+                account_id,
+                mailbox_id,
+                new_messages: 0,
+                error: Some("History fetch already in progress".to_string()),
+            });
+        }
+        mgr.start_sync(&key);
+    }
+
+    let db_clone = db.inner().clone();
+    let search_clone = search.inner().clone();
+    let sync_mgr_clone = sync_mgr.inner().clone();
+    let app_clone = app.clone();
+    let account_id_task = account_id.clone();
+    let mailbox_id_task = mailbox_id.clone();
+
+    tokio::spawn(async move {
+        let result = async {
+            let account = {
+                let db = db_clone.lock().await;
+                db.list_accounts()?
+                    .into_iter()
+                    .find(|a| a.id == account_id_task)
+                    .ok_or_else(|| anyhow::anyhow!("Account not found"))?
+            };
+
+            let mut session = mail_imap::connect_imap(&account).await?;
+            let mut total_new = 0;
+
+            let mailboxes = if let Some(mid) = &mailbox_id_task {
+                let db = db_clone.lock().await;
+                vec![db.get_mailbox_by_id(&account.id, mid)?.ok_or_else(|| anyhow::anyhow!("Mailbox not found"))?]
+            } else {
+                let db = db_clone.lock().await;
+                db.list_mailboxes(&account.id)?
+            };
+
+            for mut mailbox in mailboxes {
+                let oldest_date: Option<DateTime<Utc>> = {
+                    let db = db_clone.lock().await;
+                    db.get_mailbox_oldest_date(&mailbox.id)?
+                };
+
+                // If we have an oldest date, we fetch 'BEFORE' that date.
+                // Otherwise, we fetch the last 'days' from now.
+                let search_query = if let Some(oldest) = oldest_date {
+                    let before_date = oldest.format("%d-%b-%Y").to_string();
+                    format!("BEFORE {}", before_date)
+                } else {
+                    let since_date = (Utc::now() - ChronoDuration::days(days as i64)).format("%d-%b-%Y").to_string();
+                    format!("SINCE {}", since_date)
+                };
+
+                let _ = app_clone.emit("sync-progress", format!("Searching for history: {}…", mailbox.name));
+                
+                let _select = session.select(&mailbox.name).await?;
+                let uids_set = session.uid_search(&search_query).await?;
+                let mut uids: Vec<u32> = uids_set.into_iter().collect();
+                uids.sort_unstable_by(|a, b| b.cmp(a)); // Newest of the older mail first
+                
+                // Limit the number of history items per pull
+                uids.truncate(200);
+                
+                if !uids.is_empty() {
+                    for chunk in uids.chunks(100) {
+                        let uid_range = format_uid_sequence_set(chunk);
+                        let _ = app_clone.emit("sync-progress", format!("Fetching {} history items for {}…", uids.len(), mailbox.name));
+                        
+                        let fetches: Vec<_> = session
+                            .uid_fetch(&uid_range, "(BODY.PEEK[] FLAGS UID)")
+                            .await?
+                            .try_collect()
+                            .await?;
+                        
+                        let gmail_labels = if account.provider == "gmail" {
+                            crate::mail::imap::fetch_gmail_vibemail_labels(&mut session, &uid_range).await?
+                        } else {
+                            HashMap::new()
+                        };
+
+                        let batch_results = crate::mail::imap::parse_fetches(&fetches, &account, &mailbox, &gmail_labels);
+                        if !batch_results.is_empty() {
+                            crate::mail::imap::persist_batch(&batch_results, &account, &mailbox, &db_clone).await?;
+                            total_new += batch_results.len();
+                        }
+                    }
+                }
+            }
+            
+            let _ = session.logout().await;
+            Ok::<usize, anyhow::Error>(total_new)
+        }.await;
+
+        let err = match result {
+            Ok(_) => None,
+            Err(e) => Some(e.to_string()),
+        };
+
+        let mut mgr: tokio::sync::MutexGuard<'_, SyncManager> = sync_mgr_clone.lock().await;
+        let key = if let Some(mid) = &mailbox_id_task { format!("history:{}:{}", account_id_task, mid) } else { format!("history:{}", account_id_task) };
+        mgr.finish_sync(&key, err);
+    });
+
+    Ok(SyncResult {
+        account_id,
+        mailbox_id,
+        new_messages: 0,
+        error: None,
+    })
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -211,6 +341,7 @@ async fn do_sync(
                     flags: Vec::new(),
                     uid_validity: None,
                     uid_next: None,
+                    last_synced_at: None,
                 })
         }
     };

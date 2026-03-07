@@ -25,6 +25,16 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         conn.execute("ALTER TABLE threads ADD COLUMN has_attachments INTEGER NOT NULL DEFAULT 0", [])?;
     }
 
+    let has_last_synced_at: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('mailboxes') WHERE name='last_synced_at'",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if has_last_synced_at == 0 {
+        conn.execute("ALTER TABLE mailboxes ADD COLUMN last_synced_at INTEGER", [])?;
+    }
+
     Ok(())
 }
 
@@ -46,11 +56,13 @@ CREATE TABLE IF NOT EXISTS mailboxes (
     account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     name        TEXT NOT NULL,
     delimiter   TEXT,
-    flags       TEXT,           -- JSON array
-    uid_validity INTEGER,
-    uid_next    INTEGER,
+    flags           TEXT NOT NULL,          -- JSON array
+    uid_validity    INTEGER,
+    uid_next        INTEGER,
+    last_synced_at  INTEGER,
     UNIQUE(account_id, name)
-);
+    );
+
 
 CREATE TABLE IF NOT EXISTS messages (
     id              TEXT PRIMARY KEY,       -- <account_id>:<uid>

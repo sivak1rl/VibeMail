@@ -12,6 +12,7 @@ interface Props {
   loading: boolean;
   onLoadMore?: () => void;
   onRefresh?: () => Promise<void>;
+  onFetchHistory?: () => Promise<void>;
   hasMore?: boolean;
   query?: string;
 }
@@ -89,6 +90,7 @@ export default function InboxList({
   loading,
   onLoadMore,
   onRefresh,
+  onFetchHistory,
   hasMore,
   query,
 }: Props) {
@@ -268,6 +270,17 @@ export default function InboxList({
       <div ref={sentinelRef} />
       {loading && threads.length > 0 && (
         <div className={styles.loadingMore}>Loading more…</div>
+      )}
+      {!loading && !hasMore && !query && onFetchHistory && (
+        <div className={styles.historyFooter}>
+          <p className={styles.historyText}>End of local history</p>
+          <button 
+            className={styles.historyBtn}
+            onClick={() => onFetchHistory()}
+          >
+            Load older emails
+          </button>
+        </div>
       )}
     </div>
   );
