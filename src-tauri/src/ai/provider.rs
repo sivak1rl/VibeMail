@@ -32,6 +32,8 @@ pub type TokenStream = Pin<Box<dyn Stream<Item = Result<String>> + Send>>;
 pub trait AiProvider: Send + Sync {
     async fn complete(&self, req: CompletionRequest) -> Result<CompletionResponse>;
     async fn stream_complete(&self, req: CompletionRequest) -> Result<TokenStream>;
+    async fn embed(&self, model: &str, text: &str) -> Result<Vec<f32>>;
+    async fn embed_batch(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>>;
     fn supports_tools(&self) -> bool;
     fn name(&self) -> &str;
 }

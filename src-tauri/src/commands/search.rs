@@ -1,5 +1,6 @@
+use crate::ai::router::{AiRouter, TaskKind};
 use crate::db::{models::Thread, Database};
-use crate::search::SearchIndex;
+use crate::mail::sync::SyncManager;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -35,17 +36,170 @@ pub async fn search_messages(
 #[tauri::command]
 pub async fn search_semantic(
     request: SearchRequest,
-    search: State<'_, Arc<Mutex<SearchIndex>>>,
     db: State<'_, Arc<Mutex<Database>>>,
+    ai: State<'_, Arc<AiRouter>>,
 ) -> Result<Vec<Thread>, String> {
     let limit = request.limit.unwrap_or(20) as usize;
-    let thread_ids = {
-        let search = search.lock().await;
-        search
-            .search(&request.query, limit.saturating_mul(5))
-            .map_err(|e| e.to_string())?
-    };
+    tracing::info!("Semantic search for: \"{}\"", request.query);
+
+    // 1. Generate embedding for query
+    let query_embedding = ai.embed(&request.query).await.map_err(|e| {
+        tracing::error!("Failed to generate query embedding: {}", e);
+        e.to_string()
+    })?;
+    let model = ai
+        .model_for(&TaskKind::Embed)
+        .await
+        .map_err(|e| e.to_string())?;
+    
+    tracing::info!("Using embedding model: {}", model);
+
+    // 2. Search database for closest threads
     let db = db.lock().await;
-    db.get_threads_by_ids(&thread_ids, request.mailbox_id.as_deref())
-        .map_err(|e| e.to_string())
+    let matches = db
+        .semantic_search(&request.account_id, &query_embedding, &model, limit)
+        .map_err(|e| {
+            tracing::error!("Database semantic search failed: {}", e);
+            e.to_string()
+        })?;
+
+    tracing::info!("Found {} semantic matches", matches.len());
+    if matches.is_empty() {
+        tracing::warn!("No matches found. Ensure reindexing has completed for account {}", request.account_id);
+    }
+
+    let thread_ids: Vec<String> = matches.into_iter().map(|(id, _)| id).collect();
+
+    // 3. Hydrate threads
+    let threads = db.get_threads_by_ids(&thread_ids, request.mailbox_id.as_deref())
+        .map_err(|e| e.to_string())?;
+    
+    tracing::info!("Hydrated {} threads from {} IDs", threads.len(), thread_ids.len());
+    
+    Ok(threads)
+}
+
+#[tauri::command]
+pub async fn reindex_all_semantic(
+    account_id: String,
+    db: State<'_, Arc<Mutex<Database>>>,
+    ai: State<'_, Arc<AiRouter>>,
+    sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let account_id_task = account_id.clone();
+    let db_clone = db.inner().clone();
+    let ai_clone = ai.inner().clone();
+    let sync_mgr_clone = sync_mgr.inner().clone();
+    let app_clone = app.clone();
+
+    {
+        let mut mgr: tokio::sync::MutexGuard<'_, SyncManager> = sync_mgr.lock().await;
+        if mgr.is_syncing(&format!("reindex:{}", account_id)) {
+            return Err("Reindexing already in progress".to_string());
+        }
+        mgr.start_sync(&format!("reindex:{}", account_id));
+    }
+
+    tokio::spawn(async move {
+        use tauri::Emitter;
+        println!(">>> BACKEND: Starting reindex for {}", account_id_task);
+        
+        let result = async {
+            let model = ai_clone
+                .model_for(&TaskKind::Embed)
+                .await
+                .map_err(|e| {
+                    let err = format!("Failed to get embedding model: {}", e);
+                    println!(">>> BACKEND ERROR: {}", err);
+                    err
+                })?;
+
+            println!(">>> BACKEND: Using model {}", model);
+
+            let threads = {
+                let db = db_clone.lock().await;
+                db.list_threads(&account_id_task, None, 50000, 0)
+                    .map_err(|e| {
+                        let err = format!("Failed to list threads: {}", e);
+                        println!(">>> BACKEND ERROR: {}", err);
+                        err
+                    })?
+            };
+
+            let total = threads.len();
+            println!(">>> BACKEND: Found {} threads", total);
+            
+            if total == 0 {
+                return Ok(0);
+            }
+
+            let mut count = 0;
+            let mut success_count = 0;
+
+            for thread in threads {
+                count += 1;
+                if total < 50 || count % 10 == 0 || count == total {
+                    let _ = app_clone.emit(
+                        "reindex-progress",
+                        format!("Embedding thread {} of {}…", count, total),
+                    );
+                }
+
+                let messages = {
+                    let db = db_clone.lock().await;
+                    db.get_thread_messages(&thread.id)
+                        .map_err(|e| e.to_string())?
+                };
+
+                if messages.is_empty() { continue; }
+
+                let body = messages[0].body_text.as_deref().or(messages[0].body_html.as_deref()).unwrap_or("");
+                let body_truncated: String = body.chars().take(2000).collect();
+
+                let context = format!(
+                    "Subject: {}\n\n{}",
+                    thread.subject.as_deref().unwrap_or("(no subject)"),
+                    body_truncated
+                );
+
+                match ai_clone.embed(&context).await {
+                    Ok(embedding) => {
+                        let db = db_clone.lock().await;
+                        if let Err(e) = db.upsert_thread_embedding(&thread.id, &model, &embedding) {
+                            println!(">>> BACKEND ERROR: upsert failed: {}", e);
+                        } else {
+                            success_count += 1;
+                        }
+                    }
+                    Err(e) => {
+                        println!(">>> BACKEND WARN: embed failed: {}", e);
+                    }
+                }
+            }
+            
+            println!(">>> BACKEND: Finished. Indexed {} threads", success_count);
+            Ok::<usize, String>(success_count)
+        }
+        .await;
+
+        let err = match result {
+            Ok(_) => None,
+            Err(e) => Some(e),
+        };
+
+        let mut mgr: tokio::sync::MutexGuard<'_, SyncManager> = sync_mgr_clone.lock().await;
+        mgr.finish_sync(&format!("reindex:{}", account_id_task), err);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_reindex_status(
+    account_id: String,
+    sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
+) -> Result<bool, String> {
+    let mgr: tokio::sync::MutexGuard<'_, SyncManager> = sync_mgr.lock().await;
+    Ok(mgr.is_syncing(&format!("reindex:{}", account_id)))
 }

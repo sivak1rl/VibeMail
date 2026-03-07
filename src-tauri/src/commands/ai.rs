@@ -75,7 +75,7 @@ pub async fn summarize_thread(
     request: AiThreadRequest,
     app: AppHandle,
     db: State<'_, Arc<Mutex<Database>>>,
-    router: State<'_, Arc<Mutex<AiRouter>>>,
+    router: State<'_, Arc<AiRouter>>,
 ) -> Result<String, String> {
     let messages = {
         let db = db.lock().await;
@@ -103,13 +103,10 @@ pub async fn summarize_thread(
         },
     ];
 
-    let stream = {
-        let router = router.lock().await;
-        router
-            .stream_complete(TaskKind::Summary, chat_messages)
-            .await
-            .map_err(|e| e.to_string())?
-    };
+    let stream = router
+        .stream_complete(TaskKind::Summary, chat_messages)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let event_name = format!("ai_summary_{}", request.thread_id);
     let summary = stream_to_frontend(&app, stream, &event_name)
@@ -128,7 +125,7 @@ pub async fn draft_reply(
     request: AiThreadRequest,
     app: AppHandle,
     db: State<'_, Arc<Mutex<Database>>>,
-    router: State<'_, Arc<Mutex<AiRouter>>>,
+    router: State<'_, Arc<AiRouter>>,
 ) -> Result<String, String> {
     let messages = {
         let db = db.lock().await;
@@ -156,13 +153,10 @@ pub async fn draft_reply(
         },
     ];
 
-    let stream = {
-        let router = router.lock().await;
-        router
-            .stream_complete(TaskKind::Draft, chat_messages)
-            .await
-            .map_err(|e| e.to_string())?
-    };
+    let stream = router
+        .stream_complete(TaskKind::Draft, chat_messages)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let event_name = format!("ai_draft_{}", request.thread_id);
     stream_to_frontend(&app, stream, &event_name)
@@ -174,7 +168,7 @@ pub async fn draft_reply(
 pub async fn extract_actions(
     request: AiThreadRequest,
     db: State<'_, Arc<Mutex<Database>>>,
-    router: State<'_, Arc<Mutex<AiRouter>>>,
+    router: State<'_, Arc<AiRouter>>,
 ) -> Result<Vec<ExtractedAction>, String> {
     let messages = {
         let db = db.lock().await;
@@ -202,13 +196,10 @@ pub async fn extract_actions(
         },
     ];
 
-    let response = {
-        let router = router.lock().await;
-        router
+    let response = router
             .complete(TaskKind::Extract, chat_messages)
             .await
-            .map_err(|e| e.to_string())?
-    };
+            .map_err(|e| e.to_string())?;
 
     let actions = parse_extracted_actions(&response).map_err(|e| e.to_string())?;
     {
@@ -223,7 +214,7 @@ pub async fn extract_actions(
 pub async fn triage_thread(
     request: AiThreadRequest,
     db: State<'_, Arc<Mutex<Database>>>,
-    router: State<'_, Arc<Mutex<AiRouter>>>,
+    router: State<'_, Arc<AiRouter>>,
 ) -> Result<TriageResult, String> {
     let messages = {
         let db = db.lock().await;
@@ -260,13 +251,10 @@ pub async fn triage_thread(
         },
     ];
 
-    let response = {
-        let router = router.lock().await;
-        router
+    let response = router
             .complete(TaskKind::Triage, chat_messages)
             .await
-            .map_err(|e| e.to_string())?
-    };
+            .map_err(|e| e.to_string())?;
 
     let score = parse_triage_score(&response);
     {
@@ -287,7 +275,7 @@ pub async fn triage_thread(
 pub async fn categorize_threads(
     request: CategorizeThreadsRequest,
     db: State<'_, Arc<Mutex<Database>>>,
-    router: State<'_, Arc<Mutex<AiRouter>>>,
+    router: State<'_, Arc<AiRouter>>,
 ) -> Result<Vec<CategorizeThreadResult>, String> {
     let accounts_by_id = {
         let db = db.lock().await;
@@ -343,7 +331,6 @@ pub async fn categorize_threads(
         ];
 
         let response = {
-            let router = router.lock().await;
             timeout(
                 Duration::from_secs(45),
                 router.complete(TaskKind::Extract, chat_messages),

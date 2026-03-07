@@ -30,12 +30,48 @@
 .content {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
-  max-width: 600px;
+  padding: 32px 64px;
+  scroll-behavior: smooth;
+}
+
+.container {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.sidebar {
+  width: 220px;
+  border-right: 1px solid var(--color-border);
+  padding: 32px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.navLink {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  text-align: left;
+  font-size: 13px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.navLink:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
 }
 
 .section {
-  margin-bottom: 32px;
+  margin-bottom: 64px;
 }
 
 .sectionTitle {

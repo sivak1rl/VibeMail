@@ -5,6 +5,7 @@ import { useThreadStore } from "../stores/threads";
 import { useSearchStore } from "../stores/search";
 import { useAiStore } from "../stores/ai";
 import { usePreferencesStore } from "../stores/preferences";
+import { buildMailboxTree, type MailboxTreeNode } from "../utils/mailbox";
 import InboxList from "../components/InboxList/InboxList";
 import ThreadView from "../components/ThreadView/ThreadView";
 import SearchBar from "../components/SearchBar/SearchBar";
@@ -64,8 +65,17 @@ export default function Inbox({ onSettings }: Props) {
       void (async () => {
         await fetchMailboxes(activeAccountId);
         const initialMailboxId = useMailboxStore.getState().selectedMailboxId;
-        await syncAccount(activeAccountId, initialMailboxId);
-        await fetchMailboxes(activeAccountId, true);
+
+        // Check background tasks
+        const isSyncing = await invoke<boolean>("get_sync_status", { accountId: activeAccountId });
+        if (isSyncing) void syncAccount(activeAccountId, initialMailboxId);
+        else {
+          await syncAccount(activeAccountId, initialMailboxId);
+          await fetchMailboxes(activeAccountId, true);
+        }
+
+        const isReindexing = await invoke<boolean>("get_reindex_status", { accountId: activeAccountId });
+        if (isReindexing) void useSearchStore.getState().reindexAll(activeAccountId, false);
       })();
     }
   }, [activeAccountId, clearSearch, fetchMailboxes, syncAccount]);
@@ -83,6 +93,14 @@ export default function Inbox({ onSettings }: Props) {
     await syncAccount(activeAccountId, selectedMailboxId);
     await fetchMailboxes(activeAccountId, true);
   }, [activeAccountId, fetchMailboxes, selectedMailboxId, syncAccount]);
+
+  const handleSyncAll = useCallback(async () => {
+    if (!activeAccountId) return;
+    await syncAccount(activeAccountId, null); // null means all folders
+    await fetchMailboxes(activeAccountId, true);
+    // Refresh current view
+    void fetchThreads(activeAccountId, selectedMailboxId, focusMode);
+  }, [activeAccountId, fetchMailboxes, syncAccount, fetchThreads, selectedMailboxId, focusMode]);
 
   const handleLoadMore = useCallback(() => {
     if (!activeAccountId) return;
@@ -234,6 +252,37 @@ export default function Inbox({ onSettings }: Props) {
     await setThreadsRead(selectedThreadIds, shouldMarkRead);
   }, [selectedThreadIds, setThreadsRead, shouldMarkRead]);
 
+  const mailboxTree = useMemo(() => buildMailboxTree(mailboxes), [mailboxes]);
+
+  const renderMailboxTree = useCallback(
+    (nodes: MailboxTreeNode[], depth = 0) => {
+      return nodes.map((node) => (
+        <div key={node.fullName}>
+          <button
+            className={`${styles.navItem} ${
+              node.id === selectedMailboxId ? styles.navActive : ""
+            } ${!node.id ? styles.navItemVirtual : ""}`}
+            style={{ paddingLeft: `${depth * 12 + 10}px` }}
+            onClick={() => node.id && handleMailboxSelect(node.id)}
+          >
+            <span>{node.name}</span>
+            <span
+              className={`${styles.navBadge} ${
+                !node.mailbox || node.mailbox.unread_count === 0
+                  ? styles.navBadgeEmpty
+                  : ""
+              }`}
+            >
+              {node.mailbox?.unread_count ?? 0}
+            </span>
+          </button>
+          {node.children.length > 0 && renderMailboxTree(node.children, depth + 1)}
+        </div>
+      ));
+    },
+    [selectedMailboxId, handleMailboxSelect],
+  );
+
   return (
     <div className={styles.layout}>
       {/* Sidebar */}
@@ -271,21 +320,15 @@ export default function Inbox({ onSettings }: Props) {
           {!mailboxesLoading && !mailboxError && mailboxes.length === 0 && (
             <div className={styles.navHint}>No folders yet</div>
           )}
-          {mailboxes.map((mailbox) => (
-            <button
-              key={mailbox.id}
-              className={`${styles.navItem} ${
-                mailbox.id === selectedMailboxId ? styles.navActive : ""
-              }`}
-              onClick={() => handleMailboxSelect(mailbox.id)}
-            >
-              <span>{mailbox.name}</span>
-              {mailbox.unread_count > 0 && (
-                <span className={styles.navBadge}>{mailbox.unread_count}</span>
-              )}
-            </button>
-          ))}
+          {renderMailboxTree(mailboxTree)}
         </div>
+
+        {syncing && syncProgress && (
+          <div className={styles.sidebarStatus}>
+            <span className={styles.statusSpinner}>⟳</span>
+            <span className={styles.statusText}>{syncProgress}</span>
+          </div>
+        )}
       </div>
 
       {/* Thread list pane */}
@@ -310,9 +353,17 @@ export default function Inbox({ onSettings }: Props) {
               className={styles.syncBtn}
               onClick={handleSync}
               disabled={syncing}
-              title="Sync mail"
+              title="Sync current mailbox"
             >
               {syncing ? "⟳" : "↻"}
+            </button>
+            <button
+              className={styles.syncAllBtn}
+              onClick={handleSyncAll}
+              disabled={syncing}
+              title="Sync all folders"
+            >
+              {syncing ? "Syncing All…" : "Sync All"}
             </button>
           </div>
           <div className={styles.batchRow}>

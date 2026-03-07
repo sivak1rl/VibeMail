@@ -223,11 +223,12 @@ impl Database {
     pub fn upsert_thread(&self, thread: &Thread) -> Result<()> {
         self.conn.execute(
             r#"INSERT INTO threads
-               (id, account_id, subject, participant_ids, message_count, unread_count, last_date, last_from, triage_score, labels)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+               (id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, last_date, last_from, triage_score, labels)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
                ON CONFLICT(id) DO UPDATE SET
                subject=excluded.subject, participant_ids=excluded.participant_ids,
                message_count=excluded.message_count, unread_count=excluded.unread_count,
+               is_flagged=excluded.is_flagged,
                last_date=excluded.last_date, last_from=excluded.last_from,
                triage_score=COALESCE(excluded.triage_score, threads.triage_score),
                labels=CASE
@@ -239,6 +240,7 @@ impl Database {
                 thread.id, thread.account_id, thread.subject,
                 serde_json::to_string(&thread.participants)?,
                 thread.message_count as i64, thread.unread_count as i64,
+                thread.is_flagged as i64,
                 thread.last_date.map(|d| d.timestamp()),
                 thread.last_from,
                 thread.triage_score,
@@ -264,12 +266,13 @@ impl Database {
                     .unwrap_or_default(),
                 message_count: row.get::<_, i64>(4)? as u32,
                 unread_count: row.get::<_, i64>(5)? as u32,
+                is_flagged: row.get::<_, i64>(6)? != 0,
                 last_date: row
-                    .get::<_, Option<i64>>(6)?
+                    .get::<_, Option<i64>>(7)?
                     .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
-                last_from: row.get(7)?,
-                triage_score: row.get(8)?,
-                labels: serde_json::from_str(&row.get::<_, String>(9).unwrap_or_default())
+                last_from: row.get(8)?,
+                triage_score: row.get(9)?,
+                labels: serde_json::from_str(&row.get::<_, String>(10).unwrap_or_default())
                     .unwrap_or_default(),
                 messages: None,
             })
@@ -280,7 +283,7 @@ impl Database {
         let threads = if let Some(mailbox_id) = mailbox_id {
             let mut stmt = self.conn.prepare(
                 r#"SELECT t.id, t.account_id, t.subject, t.participant_ids, t.message_count,
-                   t.unread_count, t.last_date, t.last_from, t.triage_score, t.labels
+                   t.unread_count, t.is_flagged, t.last_date, t.last_from, t.triage_score, t.labels
                    FROM threads t
                    WHERE t.account_id=?1
                      AND EXISTS (
@@ -297,7 +300,7 @@ impl Database {
         } else {
             let mut stmt = self.conn.prepare(
                 r#"SELECT id, account_id, subject, participant_ids, message_count, unread_count,
-                   last_date, last_from, triage_score, labels
+                   is_flagged, last_date, last_from, triage_score, labels
                    FROM threads WHERE account_id=?1
                    ORDER BY last_date DESC LIMIT ?2 OFFSET ?3"#,
             )?;
@@ -509,6 +512,46 @@ impl Database {
         Ok(thread_ids.len())
     }
 
+    pub fn set_thread_flagged_state(&self, thread_id: &str, flagged: bool) -> Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, flags FROM messages WHERE thread_id=?1")?;
+        let messages = stmt
+            .query_map([thread_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        for (message_id, flags_raw) in messages {
+            let mut flags: Vec<String> = serde_json::from_str(&flags_raw).unwrap_or_default();
+            let has_flagged = flags.iter().any(|flag| flag == "\\Flagged");
+
+            if flagged && !has_flagged {
+                flags.push("\\Flagged".to_string());
+            } else if !flagged && has_flagged {
+                flags.retain(|flag| flag != "\\Flagged");
+            }
+
+            self.conn.execute(
+                "UPDATE messages SET flags=?1 WHERE id=?2",
+                rusqlite::params![serde_json::to_string(&flags)?, message_id],
+            )?;
+        }
+
+        self.conn.execute(
+            "UPDATE threads SET is_flagged=?1 WHERE id=?2",
+            rusqlite::params![flagged as i64, thread_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_threads_flagged_state(&self, thread_ids: &[String], flagged: bool) -> Result<usize> {
+        for thread_id in thread_ids {
+            self.set_thread_flagged_state(thread_id, flagged)?;
+        }
+        Ok(thread_ids.len())
+    }
+
     pub fn get_thread_message_locations(
         &self,
         thread_ids: &[String],
@@ -599,7 +642,7 @@ impl Database {
             .join(",");
         let sql = if mailbox_id.is_some() {
             format!(
-                "SELECT t.id, t.account_id, t.subject, t.participant_ids, t.message_count, t.unread_count, t.last_date, t.last_from, t.triage_score, t.labels
+                "SELECT t.id, t.account_id, t.subject, t.participant_ids, t.message_count, t.unread_count, t.is_flagged, t.last_date, t.last_from, t.triage_score, t.labels
                  FROM threads t
                  WHERE t.id IN ({})
                    AND EXISTS (
@@ -612,7 +655,7 @@ impl Database {
             )
         } else {
             format!(
-                "SELECT id, account_id, subject, participant_ids, message_count, unread_count, last_date, last_from, triage_score, labels
+                "SELECT id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, last_date, last_from, triage_score, labels
                  FROM threads WHERE id IN ({}) ORDER BY last_date DESC",
                 placeholders
             )
@@ -626,12 +669,13 @@ impl Database {
                     .unwrap_or_default(),
                 message_count: row.get::<_, i64>(4)? as u32,
                 unread_count: row.get::<_, i64>(5)? as u32,
+                is_flagged: row.get::<_, i64>(6)? != 0,
                 last_date: row
-                    .get::<_, Option<i64>>(6)?
+                    .get::<_, Option<i64>>(7)?
                     .map(|ts| chrono::Utc.timestamp_opt(ts, 0).unwrap()),
-                last_from: row.get(7)?,
-                triage_score: row.get(8)?,
-                labels: serde_json::from_str(&row.get::<_, String>(9).unwrap_or_default())
+                last_from: row.get(8)?,
+                triage_score: row.get(9)?,
+                labels: serde_json::from_str(&row.get::<_, String>(10).unwrap_or_default())
                     .unwrap_or_default(),
                 messages: None,
             })
@@ -652,6 +696,93 @@ impl Database {
         };
         Ok(threads)
     }
+
+    pub fn upsert_thread_embedding(
+        &self,
+        thread_id: &str,
+        model: &str,
+        embedding: &[f32],
+    ) -> Result<()> {
+        let blob: Vec<u8> = embedding
+            .iter()
+            .flat_map(|f| f.to_ne_bytes().to_vec())
+            .collect();
+
+        self.conn.execute(
+            "INSERT INTO thread_embeddings (thread_id, model, embedding, updated_at)
+             VALUES (?1, ?2, ?3, unixepoch())
+             ON CONFLICT(thread_id) DO UPDATE SET
+             model=excluded.model, embedding=excluded.embedding, updated_at=unixepoch()",
+            rusqlite::params![thread_id, model, blob],
+        )?;
+        Ok(())
+    }
+
+    pub fn semantic_search(
+        &self,
+        account_id: &str,
+        query_embedding: &[f32],
+        model: &str,
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT e.thread_id, e.embedding
+             FROM thread_embeddings e
+             JOIN threads t ON e.thread_id = t.id
+             WHERE t.account_id = ?1 AND e.model = ?2",
+        )?;
+
+        let matches = stmt.query_map(rusqlite::params![account_id, model], |row| {
+            let thread_id: String = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            
+            // Convert Vec<u8> to Vec<f32> safely
+            let embedding: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|chunk| {
+                    let mut array = [0u8; 4];
+                    array.copy_from_slice(chunk);
+                    f32::from_ne_bytes(array)
+                })
+                .collect();
+
+            let similarity = cosine_similarity(query_embedding, &embedding);
+            Ok((thread_id, similarity))
+        })?;
+
+        let mut results: Vec<(String, f32)> = matches.collect::<rusqlite::Result<Vec<_>>>()?;
+        
+        // Filter out zero similarity (likely error or empty embeddings)
+        results.retain(|(_, sim)| *sim > 0.0);
+        
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        if !results.is_empty() {
+            tracing::info!("Top semantic match: {} (score: {:.4})", results[0].0, results[0].1);
+        }
+        
+        results.truncate(limit);
+        Ok(results)
+    }
+}
+
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() {
+        tracing::warn!("Cosine similarity length mismatch: query {} vs stored {}. Reindexing may be required.", a.len(), b.len());
+        return 0.0;
+    }
+    let mut dot = 0.0;
+    let mut norm_a = 0.0;
+    let mut norm_b = 0.0;
+    for i in 0..a.len() {
+        dot += a[i] * b[i];
+        norm_a += a[i] * a[i];
+        norm_b += b[i] * b[i];
+    }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    dot / (norm_a.sqrt() * norm_b.sqrt())
 }
 
 #[cfg(test)]

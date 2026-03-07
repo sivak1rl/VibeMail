@@ -51,6 +51,12 @@
   flex-shrink: 0;
 }
 
+.star {
+  color: #f1c40f;
+  font-size: 13px;
+  margin-right: 4px;
+}
+
 .itemMid {
   display: flex;
   justify-content: space-between;

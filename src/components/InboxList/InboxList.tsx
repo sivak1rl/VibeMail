@@ -131,9 +131,12 @@ export default function InboxList({
               <span className={styles.date}>{formatDate(thread.last_date)}</span>
             </div>
             <div className={styles.itemMid}>
-              <span className={styles.subject}>
-                {thread.subject ?? "(no subject)"}
-              </span>
+              <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+                {thread.is_flagged && <span className={styles.star}>★</span>}
+                <span className={styles.subject}>
+                  {thread.subject ?? "(no subject)"}
+                </span>
+              </div>
               {thread.unread_count > 0 && (
                 <span className={styles.unreadBadge}>{thread.unread_count}</span>
               )}

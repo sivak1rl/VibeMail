@@ -61,6 +61,7 @@ pub struct Thread {
     pub participants: Vec<EmailAddress>,
     pub message_count: u32,
     pub unread_count: u32,
+    pub is_flagged: bool,
     pub last_date: Option<DateTime<Utc>>,
     pub last_from: Option<String>,
     pub triage_score: Option<f64>,
