@@ -11,14 +11,42 @@ interface Props {
 
 export default function SearchBar({ mailboxId = null, onResults, onClear }: Props) {
   const { activeAccountId } = useAccountStore();
-  const { query, searching, search, searchSemantic, reindexing, reindexProgress, reindexAll, clear } = useSearchStore();
+  const {
+    query,
+    searching,
+    search,
+    searchSemantic,
+    reindexing,
+    reindexProgress,
+    reindexAll,
+    clear,
+    history,
+    loadHistory,
+  } = useSearchStore();
   const [localQuery, setLocalQuery] = useState(query);
   const [useSemantic, setUseSemantic] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
 
   useEffect(() => {
     setLocalQuery(query);
   }, [query]);
+
+  // Close history when clicking outside
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setShowHistory(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
 
   const runSearch = async (val: string) => {
     if (!activeAccountId) return;
@@ -27,6 +55,7 @@ export default function SearchBar({ mailboxId = null, onResults, onClear }: Prop
     } else {
       await search(val, activeAccountId, mailboxId);
     }
+    setShowHistory(false);
     onResults();
   };
 
@@ -43,7 +72,7 @@ export default function SearchBar({ mailboxId = null, onResults, onClear }: Prop
     }
 
     timerRef.current = setTimeout(() => {
-      void runSearch(val);
+      void runSearch(val.trim());
     }, 350);
   };
 
@@ -60,20 +89,65 @@ export default function SearchBar({ mailboxId = null, onResults, onClear }: Prop
     }
   };
 
+  const applyFilter = (filter: string) => {
+    const newQuery = localQuery.trim() ? `${localQuery} ${filter}` : filter;
+    setLocalQuery(newQuery);
+    // Filters are best handled by standard search, so we force it here
+    if (activeAccountId) {
+      void search(newQuery, activeAccountId, mailboxId);
+      setShowHistory(false);
+      onResults();
+    }
+  };
+
   return (
-    <div className={styles.container}>
+    <div className={styles.container} ref={containerRef}>
       <div className={styles.wrapper}>
         <span className={styles.icon}>⌕</span>
         <input
           className={styles.input}
           type="search"
-          placeholder={useSemantic ? "Semantic search..." : "Search email..."}
+          placeholder={useSemantic ? "Semantic search..." : "Search email (try from: or is:unread)"}
           value={localQuery}
           onChange={handleChange}
+          onFocus={() => setShowHistory(true)}
         />
         {searching && <span className={styles.spinner}>⟳</span>}
         {localQuery && !searching && (
           <button className={styles.clearBtn} onClick={handleClear}>✕</button>
+        )}
+
+        {showHistory && (history.length > 0 || !localQuery) && (
+          <div className={styles.historyDropdown}>
+            {!localQuery && (
+              <div className={styles.filterSection}>
+                <div className={styles.historyTitle}>Filters</div>
+                <div className={styles.filterGrid}>
+                  <button className={styles.filterBtn} onClick={() => applyFilter("is:unread")}>is:unread</button>
+                  <button className={styles.filterBtn} onClick={() => applyFilter("has:attachment")}>has:attachment</button>
+                  <button className={styles.filterBtn} onClick={() => applyFilter("from:")}>from:...</button>
+                  <button className={styles.filterBtn} onClick={() => applyFilter("to:")}>to:...</button>
+                </div>
+              </div>
+            )}
+            {history.length > 0 && (
+              <>
+                <div className={styles.historyTitle}>Recent Searches</div>
+                {history.map((h, i) => (
+                  <button
+                    key={i}
+                    className={styles.historyItem}
+                    onClick={() => {
+                      setLocalQuery(h);
+                      void runSearch(h);
+                    }}
+                  >
+                    <span>↺</span> {h}
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
         )}
       </div>
 

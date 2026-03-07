@@ -22,6 +22,7 @@ pub struct Mailbox {
     pub flags: Vec<String>,
     pub uid_validity: Option<u32>,
     pub uid_next: Option<u32>,
+    pub last_synced_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +63,7 @@ pub struct Thread {
     pub message_count: u32,
     pub unread_count: u32,
     pub is_flagged: bool,
+    pub has_attachments: bool,
     pub last_date: Option<DateTime<Utc>>,
     pub last_from: Option<String>,
     pub triage_score: Option<f64>,
@@ -104,6 +106,16 @@ pub struct ExtractedAction {
     pub text: String,
     pub date: Option<String>,
     pub priority: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct Attachment {
+    pub id: String,
+    pub message_id: String,
+    pub filename: Option<String>,
+    pub content_type: Option<String>,
+    pub size: u32,
+    pub data: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

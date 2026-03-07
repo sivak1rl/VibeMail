@@ -37,6 +37,7 @@ export interface Thread {
   message_count: number;
   unread_count: number;
   is_flagged: boolean;
+  has_attachments: boolean;
   last_date: string | null;
   last_from: string | null;
   triage_score: number | null;
@@ -51,6 +52,12 @@ interface SyncResult {
   error: string | null;
 }
 
+export interface SyncProgress {
+  message: string;
+  current: number | null;
+  total: number | null;
+}
+
 interface ThreadStore {
   threads: Thread[];
   selectedThreadId: string | null;
@@ -58,7 +65,7 @@ interface ThreadStore {
   loading: boolean;
   syncing: boolean;
   syncError: string | null;
-  syncProgress: string | null;
+  syncProgress: SyncProgress | null;
   focusMode: boolean;
   hasMore: boolean;
   fetchThreads: (accountId: string, mailboxId?: string | null, focusOnly?: boolean) => Promise<void>;
@@ -68,6 +75,8 @@ interface ThreadStore {
   setThreadsRead: (threadIds: string[], read: boolean) => Promise<void>;
   setThreadsFlagged: (threadIds: string[], flagged: boolean) => Promise<void>;
   archiveThreads: (threadIds: string[]) => Promise<void>;
+  fetchHistory: (accountId: string, mailboxId: string | null, days?: number, limit?: number) => Promise<void>;
+  fetchEntireMailbox: (accountId: string, mailboxId: string) => Promise<void>;
   applyThreadLabels: (
     labelsByThread: Record<string, string>,
     knownCategoryLabels?: string[],
@@ -140,21 +149,30 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
   },
 
   selectThread: async (threadId) => {
+    if (!threadId) return;
     set({ selectedThreadId: threadId });
     try {
       const messages = await invoke<Message[]>("get_thread", { threadId });
+      if (!Array.isArray(messages)) {
+        throw new Error("get_thread returned invalid data (not an array)");
+      }
       set({ threadMessages: messages });
     } catch (e) {
-      console.error("Failed to load thread messages:", e);
+      console.error("Store: Failed to load thread messages:", e);
+      set({ threadMessages: [] });
     }
   },
 
   syncAccount: async (accountId, mailboxId = null) => {
-    set({ syncing: true, syncError: null, syncProgress: "Starting background sync…" });
+    set({
+      syncing: true,
+      syncError: null,
+      syncProgress: { message: "Starting background sync…", current: null, total: null },
+    });
     let unlisten: UnlistenFn | null = null;
 
     try {
-      unlisten = await listen<string>("sync-progress", (event) => {
+      unlisten = await listen<SyncProgress>("sync-progress", (event) => {
         set({ syncProgress: event.payload });
       });
 
@@ -172,27 +190,27 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
         if (!isSyncing) {
           if (pollTimer) clearInterval(pollTimer);
           set({ syncing: false, syncProgress: null });
-          // Final refresh
-          const PAGE = 50;
+          
+          // Refresh the view
+          const currentCount = get().threads.length;
+          const PAGE = Math.max(50, currentCount);
           const focusOnly = get().focusMode;
-          if (mailboxId) {
-            const threads = await invoke<Thread[]>("list_threads", {
-              request: {
-                account_id: accountId,
-                mailbox_id: mailboxId,
-                limit: PAGE,
-                offset: 0,
-                focus_only: focusOnly,
-              },
-            });
-            set({ threads, hasMore: threads.length >= PAGE });
-          }
+          const threads = await invoke<Thread[]>("list_threads", {
+            request: {
+              account_id: accountId,
+              mailbox_id: mailboxId,
+              limit: PAGE,
+              offset: 0,
+              focus_only: focusOnly,
+            },
+          });
+          set({ threads, hasMore: threads.length >= PAGE });
         }
       };
 
       const pollTimer = setInterval(() => {
         void checkStatus();
-      }, 2000);
+      }, 500);
 
       // We still return the promise, but it "resolves" after starting
       return { account_id: accountId, mailbox_id: mailboxId, new_messages: 0, error: null };
@@ -204,6 +222,114 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
       // We don't unlisten immediately because sync is in background.
       // But we can't keep unlisten forever easily in this pattern.
       // For now, let's keep it until it's done.
+    }
+  },
+
+  fetchHistory: async (accountId, mailboxId, days = 30, limit = 100) => {
+    set({
+      syncing: true,
+      syncError: null,
+      syncProgress: { message: "Preparing history fetch…", current: null, total: null },
+    });
+    let unlisten: UnlistenFn | null = null;
+
+    try {
+      unlisten = await listen<SyncProgress>("sync-progress", (event) => {
+        set({ syncProgress: event.payload });
+      });
+
+      await invoke<SyncResult>("fetch_history", {
+        request: {
+          account_id: accountId,
+          mailbox_id: mailboxId,
+          days,
+          limit,
+        },
+      });
+
+      // Poll for completion (similar to syncAccount)
+      const checkStatus = async () => {
+        const isSyncing = await invoke<boolean>("get_sync_status", { accountId });
+        if (!isSyncing) {
+          if (pollTimer) clearInterval(pollTimer);
+          set({ syncing: false, syncProgress: null });
+          
+          // Refresh the view and expand by the requested limit to show the new history
+          const currentCount = get().threads.length;
+          const PAGE = currentCount + limit;
+          const focusOnly = get().focusMode;
+          
+          const threads = await invoke<Thread[]>("list_threads", {
+            request: {
+              account_id: accountId,
+              mailbox_id: mailboxId,
+              limit: PAGE,
+              offset: 0,
+              focus_only: focusOnly,
+            },
+          });
+          set({ threads, hasMore: threads.length >= PAGE });
+        }
+      };
+
+      const pollTimer = setInterval(() => {
+        void checkStatus();
+      }, 500);
+    } catch (e) {
+      set({ syncing: false, syncError: String(e), syncProgress: null });
+      throw e;
+    }
+  },
+
+  fetchEntireMailbox: async (accountId, mailboxId) => {
+    set({
+      syncing: true,
+      syncError: null,
+      syncProgress: { message: "Starting full mailbox fetch…", current: null, total: null },
+    });
+    let unlisten: UnlistenFn | null = null;
+
+    try {
+      unlisten = await listen<SyncProgress>("sync-progress", (event) => {
+        set({ syncProgress: event.payload });
+      });
+
+      await invoke<SyncResult>("fetch_entire_mailbox", {
+        request: {
+          account_id: accountId,
+          mailbox_id: mailboxId,
+        },
+      });
+
+      const checkStatus = async () => {
+        // We reuse get_sync_status which checks all keys
+        const isSyncing = await invoke<boolean>("get_sync_status", { accountId });
+        if (!isSyncing) {
+          if (pollTimer) clearInterval(pollTimer);
+          set({ syncing: false, syncProgress: null });
+          
+          const currentCount = get().threads.length;
+          const PAGE = Math.max(100, currentCount + 100);
+          const focusOnly = get().focusMode;
+          const threads = await invoke<Thread[]>("list_threads", {
+            request: {
+              account_id: accountId,
+              mailbox_id: mailboxId,
+              limit: PAGE,
+              offset: 0,
+              focus_only: focusOnly,
+            },
+          });
+          set({ threads, hasMore: threads.length >= PAGE });
+        }
+      };
+
+      const pollTimer = setInterval(() => {
+        void checkStatus();
+      }, 500);
+    } catch (e) {
+      set({ syncing: false, syncError: String(e), syncProgress: null });
+      throw e;
     }
   },
 
@@ -251,40 +377,46 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
     const ids = [...new Set(threadIds)].filter(Boolean);
     if (ids.length === 0) return;
 
-    await invoke<number>("set_threads_flagged", {
-      request: {
-        thread_ids: ids,
-        flagged,
-      },
-    });
+    try {
+      await invoke<number>("set_threads_flagged", {
+        request: {
+          thread_ids: ids,
+          flagged,
+        },
+      });
 
-    set((state) => {
-      const idSet = new Set(ids);
-      const threads = state.threads.map((thread) =>
-        idSet.has(thread.id)
-          ? {
-              ...thread,
-              is_flagged: flagged,
-            }
-          : thread,
-      );
+      set((state) => {
+        const idSet = new Set(ids);
+        const threads = state.threads.map((thread) =>
+          idSet.has(thread.id)
+            ? {
+                ...thread,
+                is_flagged: flagged,
+              }
+            : thread,
+        );
 
-      const selected = state.selectedThreadId;
-      const selectedIsTarget = selected ? idSet.has(selected) : false;
-      const threadMessages = selectedIsTarget
-        ? state.threadMessages.map((message) => {
-            const flags = new Set(message.flags);
+        const selected = state.selectedThreadId;
+        const selectedIsTarget = selected ? idSet.has(selected) : false;
+        
+        let threadMessages = state.threadMessages;
+        if (selectedIsTarget && Array.isArray(threadMessages)) {
+          threadMessages = threadMessages.map((message) => {
+            const flags = new Set(message.flags || []);
             if (flagged) {
               flags.add("\\Flagged");
             } else {
               flags.delete("\\Flagged");
             }
             return { ...message, flags: Array.from(flags) };
-          })
-        : state.threadMessages;
+          });
+        }
 
-      return { threads, threadMessages };
-    });
+        return { threads, threadMessages };
+      });
+    } catch (e) {
+      console.error("Store: setThreadsFlagged failed:", e);
+    }
   },
 
   archiveThreads: async (threadIds) => {

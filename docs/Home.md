@@ -16,6 +16,8 @@ VibeMail is an **AI-Native Desktop Email Client** built with [Tauri 2](https://v
 
 ## Features
 - **Multi-account IMAP/SMTP**: Gmail, Outlook, and generic IMAP support.
-- **Semantic Search**: Vector indexing with Tantivy for smarter queries.
-- **Smart Threading**: Conversation grouping using the JWZ algorithm.
-- **Triage & Insights**: Automatic importance scoring and thread summarization.
+- **Semantic Search**: Meaning-based queries using vector embeddings.
+- **Background Sync**: Non-blocking updates with live sidebar progress.
+- **Attachment Sidebar**: Unified access to all thread files with image previews.
+- **Intelligent Triage**: AI-powered importance scoring and smart labeling.
+- **Responsive Design**: Collapsible sidebar and focused lightbox email view.

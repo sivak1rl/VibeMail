@@ -12,6 +12,7 @@ pub struct SearchRequest {
     pub account_id: String,
     pub mailbox_id: Option<String>,
     pub limit: Option<u32>,
+    pub offset: Option<u32>,
 }
 
 #[tauri::command]
@@ -20,6 +21,7 @@ pub async fn search_messages(
     db: State<'_, Arc<Mutex<Database>>>,
 ) -> Result<Vec<Thread>, String> {
     let limit = request.limit.unwrap_or(20);
+    let offset = request.offset.unwrap_or(0);
     let db = db.lock().await;
     let thread_ids = db
         .fts_search(
@@ -27,9 +29,10 @@ pub async fn search_messages(
             &request.account_id,
             request.mailbox_id.as_deref(),
             limit,
+            offset,
         )
         .map_err(|e| e.to_string())?;
-    db.get_threads_by_ids(&thread_ids, request.mailbox_id.as_deref())
+    db.get_threads_by_ids(&thread_ids, None)
         .map_err(|e| e.to_string())
 }
 
@@ -40,6 +43,7 @@ pub async fn search_semantic(
     ai: State<'_, Arc<AiRouter>>,
 ) -> Result<Vec<Thread>, String> {
     let limit = request.limit.unwrap_or(20) as usize;
+    let offset = request.offset.unwrap_or(0) as usize;
     tracing::info!("Semantic search for: \"{}\"", request.query);
 
     // 1. Generate embedding for query
@@ -57,21 +61,17 @@ pub async fn search_semantic(
     // 2. Search database for closest threads
     let db = db.lock().await;
     let matches = db
-        .semantic_search(&request.account_id, &query_embedding, &model, limit)
+        .semantic_search(&request.account_id, &query_embedding, &model, limit, offset)
         .map_err(|e| {
             tracing::error!("Database semantic search failed: {}", e);
             e.to_string()
         })?;
 
     tracing::info!("Found {} semantic matches", matches.len());
-    if matches.is_empty() {
-        tracing::warn!("No matches found. Ensure reindexing has completed for account {}", request.account_id);
-    }
-
     let thread_ids: Vec<String> = matches.into_iter().map(|(id, _)| id).collect();
 
-    // 3. Hydrate threads
-    let threads = db.get_threads_by_ids(&thread_ids, request.mailbox_id.as_deref())
+    // 3. Hydrate threads (Global search)
+    let threads = db.get_threads_by_ids(&thread_ids, None)
         .map_err(|e| e.to_string())?;
     
     tracing::info!("Hydrated {} threads from {} IDs", threads.len(), thread_ids.len());

@@ -39,8 +39,7 @@ impl SearchIndex {
         body: &str,
         sender: &str,
     ) -> Result<()> {
-        let mut writer: IndexWriter = self.index.writer(50_000_000)?;
-
+        let mut writer = self.index.writer(50_000_000)?;
         let thread_id_field = self.schema.get_field("thread_id").unwrap();
         let subject_field = self.schema.get_field("subject").unwrap();
         let body_field = self.schema.get_field("body").unwrap();
@@ -52,7 +51,13 @@ impl SearchIndex {
             body_field => body,
             sender_field => sender,
         ))?;
+        writer.commit()?;
+        Ok(())
+    }
 
+    pub fn clear_all(&self) -> Result<()> {
+        let mut writer: IndexWriter<TantivyDocument> = self.index.writer(50_000_000)?;
+        writer.delete_all_documents()?;
         writer.commit()?;
         Ok(())
     }

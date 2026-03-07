@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import type { Thread } from "../../stores/threads";
 import styles from "./InboxList.module.css";
@@ -11,7 +11,40 @@ interface Props {
   onToggleSelect: (id: string, selected: boolean, withShift: boolean) => void;
   loading: boolean;
   onLoadMore?: () => void;
+  onRefresh?: () => Promise<void>;
+  onFetchHistory?: () => Promise<void>;
+  onFetchAll?: () => Promise<void>;
   hasMore?: boolean;
+  query?: string;
+}
+
+const PULL_THRESHOLD = 80;
+
+function Highlight({ text, query }: { text: string; query?: string }) {
+  if (!query || !query.trim() || !text) return <>{text}</>;
+
+  // Split query into terms, ignoring filters like from:
+  const terms = query
+    .split(/\s+/)
+    .filter((t) => !t.includes(":"))
+    .filter((t) => t.length > 1);
+
+  if (terms.length === 0) return <>{text}</>;
+
+  const regex = new RegExp(`(${terms.join("|")})`, "gi");
+  const parts = text.split(regex);
+
+  return (
+    <>
+      {parts.map((part, i) =>
+        regex.test(part) ? (
+          <mark key={i} className={styles.mark}>{part}</mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
 }
 
 function TriageDot({ score }: { score: number | null }) {
@@ -57,32 +90,93 @@ export default function InboxList({
   onToggleSelect,
   loading,
   onLoadMore,
+  onRefresh,
+  onFetchHistory,
+  onFetchAll,
   hasMore,
+  query,
 }: Props) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const startY = useRef(0);
   const selectedSet = new Set(selectedThreadIds);
 
   const handleScroll = useCallback(() => {
-    if (!onLoadMore || !hasMore) return;
-    const el = sentinelRef.current?.parentElement;
+    if (!onLoadMore || !hasMore || loading) return;
+    const el = containerRef.current;
     if (!el) return;
     if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) {
       onLoadMore();
     }
-  }, [onLoadMore, hasMore]);
+  }, [onLoadMore, hasMore, loading]);
 
   useEffect(() => {
-    const el = sentinelRef.current?.parentElement;
+    const el = containerRef.current;
     if (!el) return;
     el.addEventListener("scroll", handleScroll);
     return () => el.removeEventListener("scroll", handleScroll);
   }, [handleScroll]);
 
+  // Pull to refresh logic
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !onRefresh) return;
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (el.scrollTop === 0) {
+        startY.current = e.touches[0].pageY;
+      } else {
+        startY.current = 0;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (startY.current === 0 || refreshing) return;
+      const currentY = e.touches[0].pageY;
+      const diff = currentY - startY.current;
+      if (diff > 0) {
+        setPullDistance(Math.min(diff * 0.5, PULL_THRESHOLD + 20));
+        if (diff > 10) e.preventDefault();
+      }
+    };
+
+    const handleTouchEnd = async () => {
+      if (pullDistance >= PULL_THRESHOLD) {
+        setRefreshing(true);
+        setPullDistance(PULL_THRESHOLD);
+        try {
+          await onRefresh();
+        } finally {
+          setRefreshing(false);
+          setPullDistance(0);
+        }
+      } else {
+        setPullDistance(0);
+      }
+      startY.current = 0;
+    };
+
+    el.addEventListener("touchstart", handleTouchStart);
+    el.addEventListener("touchmove", handleTouchMove, { passive: false });
+    el.addEventListener("touchend", handleTouchEnd);
+    return () => {
+      el.removeEventListener("touchstart", handleTouchStart);
+      el.removeEventListener("touchmove", handleTouchMove);
+      el.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [onRefresh, pullDistance, refreshing]);
+
   if (loading && threads.length === 0) {
     return (
       <div className={styles.list}>
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div key={i} className={styles.skeleton} />
+        {Array.from({ length: 12 }).map((_, i) => (
+          <div key={i} className={styles.itemSkeleton}>
+            <div className={styles.skeletonLine} style={{ width: "40%", height: "14px" }} />
+            <div className={styles.skeletonLine} style={{ width: "80%", height: "12px", marginTop: "8px" }} />
+            <div className={styles.skeletonLine} style={{ width: "20%", height: "10px", marginTop: "8px" }} />
+          </div>
         ))}
       </div>
     );
@@ -91,13 +185,34 @@ export default function InboxList({
   if (threads.length === 0) {
     return (
       <div className={styles.empty}>
-        <p>No messages</p>
+        <div className={styles.emptyIcon}>{query ? "🔍" : "📥"}</div>
+        <div className={styles.emptyTitle}>
+          {query ? "No results found" : "Your inbox is empty"}
+        </div>
+        <div className={styles.emptyText}>
+          {query 
+            ? `We couldn't find anything matching "${query}"`
+            : "Enjoy the peace and quiet!"}
+        </div>
+        {onRefresh && (
+          <button className={styles.refreshBtn} onClick={() => onRefresh()}>
+            Refresh
+          </button>
+        )}
       </div>
     );
   }
 
   return (
-    <div className={styles.list}>
+    <div className={styles.list} ref={containerRef}>
+      {pullDistance > 0 && (
+        <div 
+          className={styles.pullIndicator}
+          style={{ height: `${pullDistance}px`, opacity: pullDistance / PULL_THRESHOLD }}
+        >
+          {refreshing ? "↻" : pullDistance >= PULL_THRESHOLD ? "↑" : "↓"}
+        </div>
+      )}
       {threads.map((thread) => {
         const isUnread = thread.unread_count > 0;
         const isSelected = thread.id === selectedId;
@@ -126,15 +241,18 @@ export default function InboxList({
                     onToggleSelect(thread.id, !isChecked, event.shiftKey);
                   }}
                 />
-                <span className={styles.sender}>{senderDisplay}</span>
+                <span className={styles.sender}>
+                  <Highlight text={senderDisplay} query={query} />
+                </span>
               </div>
               <span className={styles.date}>{formatDate(thread.last_date)}</span>
             </div>
             <div className={styles.itemMid}>
               <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
                 {thread.is_flagged && <span className={styles.star}>★</span>}
+                {thread.has_attachments && <span className={styles.paperclip}>📎</span>}
                 <span className={styles.subject}>
-                  {thread.subject ?? "(no subject)"}
+                  <Highlight text={thread.subject ?? "(no subject)"} query={query} />
                 </span>
               </div>
               {thread.unread_count > 0 && (
@@ -154,6 +272,35 @@ export default function InboxList({
       <div ref={sentinelRef} />
       {loading && threads.length > 0 && (
         <div className={styles.loadingMore}>Loading more…</div>
+      )}
+      {!loading && !hasMore && !query && (onFetchHistory || onFetchAll) && (
+        <div className={styles.historyFooter}>
+          <p className={styles.historyText}>End of local history</p>
+          <div className={styles.historyActions}>
+            {onFetchHistory && (
+              <button 
+                className={styles.historyBtn}
+                onClick={() => {
+                  console.log("InboxList: Requesting history fetch");
+                  void onFetchHistory();
+                }}
+              >
+                Load older emails
+              </button>
+            )}
+            {onFetchAll && (
+              <button 
+                className={`${styles.historyBtn} ${styles.historyBtnAll}`}
+                onClick={() => {
+                  console.log("InboxList: Requesting full fetch");
+                  void onFetchAll();
+                }}
+              >
+                Load entire folder
+              </button>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );

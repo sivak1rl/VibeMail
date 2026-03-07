@@ -12,6 +12,10 @@ struct ThreadNode {
 }
 
 pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
+    if messages.is_empty() {
+        return vec![];
+    }
+    println!(">>> THREADING: Starting build for {} messages", messages.len());
     // Step 1: Build id_table mapping message-id -> node
     let mut id_table: HashMap<String, ThreadNode> = HashMap::new();
     let mut root_ids: Vec<String> = Vec::new();
@@ -122,6 +126,7 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
         let is_flagged = thread_messages
             .iter()
             .any(|m| m.flags.iter().any(|f| f == "\\Flagged"));
+        let has_attachments = thread_messages.iter().any(|m| m.has_attachments);
 
         let mut participants: Vec<_> = thread_messages
             .iter()
@@ -148,6 +153,7 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
             message_count: count,
             unread_count,
             is_flagged,
+            has_attachments,
             last_date,
             last_from,
             triage_score: thread_messages
@@ -161,6 +167,7 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
 
     // Sort by most recent
     threads.sort_by(|a, b| b.last_date.cmp(&a.last_date));
+    println!(">>> THREADING: Successfully built {} threads", threads.len());
     threads
 }
 

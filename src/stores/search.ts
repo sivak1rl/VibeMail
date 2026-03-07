@@ -6,7 +6,10 @@ import type { Thread } from "./threads";
 interface SearchStore {
   query: string;
   results: Thread[];
+  history: string[];
   searching: boolean;
+  hasMore: boolean;
+  lastSearchMode: "fts" | "semantic";
   reindexing: boolean;
   reindexProgress: string | null;
   setQuery: (q: string) => void;
@@ -16,30 +19,63 @@ interface SearchStore {
     accountId: string,
     mailboxId?: string | null,
   ) => Promise<void>;
+  loadMore: (accountId: string, mailboxId?: string | null) => Promise<void>;
   reindexAll: (accountId: string) => Promise<void>;
   clear: () => void;
+  loadHistory: () => void;
+  clearHistory: () => void;
 }
 
-export const useSearchStore = create<SearchStore>((set) => ({
+const HISTORY_KEY = "vibemail.search_history";
+const PAGE_SIZE = 30;
+
+export const useSearchStore = create<SearchStore>((set, get) => ({
   query: "",
   results: [],
+  history: [],
   searching: false,
+  hasMore: false,
+  lastSearchMode: "fts",
   reindexing: false,
   reindexProgress: null,
 
   setQuery: (q) => set({ query: q }),
 
+  loadHistory: () => {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (raw) {
+      try {
+        set({ history: JSON.parse(raw) });
+      } catch {
+        set({ history: [] });
+      }
+    }
+  },
+
+  clearHistory: () => {
+    localStorage.removeItem(HISTORY_KEY);
+    set({ history: [] });
+  },
+
+  addToHistory: (query: string) => {
+    if (!query.trim()) return;
+    const history = [query, ...get().history.filter((q) => q !== query)].slice(0, 10);
+    set({ history });
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  },
+
   search: async (query, accountId, mailboxId = null) => {
     if (!query.trim()) {
-      set({ results: [], query: "" });
+      set({ results: [], query: "", hasMore: false });
       return;
     }
-    set({ searching: true, query });
+    set({ searching: true, query, lastSearchMode: "fts" });
     try {
       const results = await invoke<Thread[]>("search_messages", {
-        request: { query, account_id: accountId, mailbox_id: mailboxId, limit: 30 },
+        request: { query, account_id: accountId, mailbox_id: mailboxId, limit: PAGE_SIZE },
       });
-      set({ results, searching: false });
+      set({ results, searching: false, hasMore: results.length >= PAGE_SIZE });
+      (get() as any).addToHistory(query);
     } catch (e) {
       set({ searching: false });
     }
@@ -47,15 +83,42 @@ export const useSearchStore = create<SearchStore>((set) => ({
 
   searchSemantic: async (query, accountId, mailboxId = null) => {
     if (!query.trim()) {
-      set({ results: [], query: "" });
+      set({ results: [], query: "", hasMore: false });
       return;
     }
-    set({ searching: true, query });
+    set({ searching: true, query, lastSearchMode: "semantic" });
     try {
       const results = await invoke<Thread[]>("search_semantic", {
-        request: { query, account_id: accountId, mailbox_id: mailboxId, limit: 30 },
+        request: { query, account_id: accountId, mailbox_id: mailboxId, limit: PAGE_SIZE },
       });
-      set({ results, searching: false });
+      set({ results, searching: false, hasMore: results.length >= PAGE_SIZE });
+      (get() as any).addToHistory(query);
+    } catch (e) {
+      set({ searching: false });
+    }
+  },
+
+  loadMore: async (accountId, mailboxId = null) => {
+    const { query, results, searching, hasMore, lastSearchMode } = get();
+    if (searching || !hasMore || !query) return;
+
+    set({ searching: true });
+    try {
+      const command = lastSearchMode === "semantic" ? "search_semantic" : "search_messages";
+      const more = await invoke<Thread[]>(command, {
+        request: {
+          query,
+          account_id: accountId,
+          mailbox_id: mailboxId,
+          limit: PAGE_SIZE,
+          offset: results.length,
+        },
+      });
+      set({
+        results: [...results, ...more],
+        searching: false,
+        hasMore: more.length >= PAGE_SIZE,
+      });
     } catch (e) {
       set({ searching: false });
     }
@@ -96,5 +159,5 @@ export const useSearchStore = create<SearchStore>((set) => ({
     }
   },
 
-  clear: () => set({ query: "", results: [] }),
+  clear: () => set({ query: "", results: [], hasMore: false }),
 }));

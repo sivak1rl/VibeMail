@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Component, ReactNode } from "react";
 import { useAccountStore } from "./stores/accounts";
 import { useMailboxStore } from "./stores/mailboxes";
 import { useThreadStore } from "./stores/threads";
@@ -7,6 +7,35 @@ import Inbox from "./pages/Inbox";
 import Settings from "./pages/Settings";
 import AccountSetup from "./pages/AccountSetup";
 import styles from "./App.module.css";
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: "40px", color: "#ff6b6b", background: "#1a1a1a", height: "100vh", width: "100vw", overflow: "auto" }}>
+          <h2>Application Error</h2>
+          <pre style={{ fontSize: "12px", marginTop: "20px", whiteSpace: "pre-wrap" }}>
+            {this.state.error?.stack}
+          </pre>
+          <button 
+            onClick={() => window.location.reload()}
+            style={{ marginTop: "20px", padding: "8px 16px", cursor: "pointer" }}
+          >
+            Reload Application
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 type Page = "inbox" | "settings" | "setup";
 
@@ -49,14 +78,23 @@ export default function App() {
   }
 
   return (
-    <div className={styles.app}>
-      {page === "setup" && <AccountSetup onDone={() => setPage("inbox")} />}
-      {page === "inbox" && (
-        <Inbox onSettings={() => setPage("settings")} />
-      )}
-      {page === "settings" && (
-        <Settings onBack={() => setPage("inbox")} />
-      )}
-    </div>
+    <ErrorBoundary>
+      <div className={styles.app}>
+        {page === "setup" && <AccountSetup onDone={() => setPage("inbox")} />}
+        {page === "inbox" && (
+          <Inbox onSettings={() => setPage("settings")} />
+        )}
+        {page === "settings" && (
+          <Settings 
+            onBack={() => setPage("inbox")} 
+            onReset={async () => {
+              await fetchAccounts();
+              setPage("inbox");
+            }}
+          />
+        )}
+
+      </div>
+    </ErrorBoundary>
   );
 }

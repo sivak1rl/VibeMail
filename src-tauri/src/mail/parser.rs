@@ -1,7 +1,8 @@
-use crate::db::models::{EmailAddress, Message};
+use crate::db::models::{Attachment, EmailAddress, Message};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use mail_parser::{Addr, Address, HeaderValue, MessageParser};
+use mail_parser::{Addr, Address, HeaderValue, MessageParser, MimeHeaders};
+use uuid::Uuid;
 
 pub fn parse_message(
     raw: &[u8],
@@ -9,7 +10,7 @@ pub fn parse_message(
     account_id: &str,
     mailbox_id: &str,
     uid: u32,
-) -> Result<Message> {
+) -> Result<(Message, Vec<Attachment>)> {
     let parser = MessageParser::default();
     let parsed = parser
         .parse(raw)
@@ -21,7 +22,6 @@ pub fn parse_message(
 
     let subject = parsed.subject().map(|s| s.to_string());
 
-    // from/to/cc return Option<&Address<'_>>
     let from = extract_opt_address(parsed.from());
     let to = extract_opt_address(parsed.to());
     let cc = extract_opt_address(parsed.cc());
@@ -30,7 +30,6 @@ pub fn parse_message(
         .date()
         .map(|d| DateTime::from_timestamp(d.to_timestamp(), 0).unwrap_or_default());
 
-    // references() and in_reply_to() return &HeaderValue (never Option; Empty when absent)
     let references_ids: Vec<String> = match parsed.references() {
         HeaderValue::Text(t) => vec![normalize_msgid(t)],
         HeaderValue::TextList(list) => list.iter().map(|s| normalize_msgid(s)).collect(),
@@ -45,9 +44,25 @@ pub fn parse_message(
 
     let body_text = parsed.body_text(0).map(|s| s.to_string());
     let body_html = parsed.body_html(0).map(|s| s.to_string());
-    let has_attachments = parsed.attachments().count() > 0;
+    
+    let mut attachments = Vec::new();
+    for part in parsed.attachments() {
+        let ct_str = part.content_type().map(|ct| {
+            format!("{}/{}", ct.ctype(), ct.subtype().unwrap_or("octet-stream"))
+        });
+        attachments.push(Attachment {
+            id: Uuid::new_v4().to_string(),
+            message_id: id.to_string(),
+            filename: part.attachment_name().map(|s| s.to_string()),
+            content_type: ct_str,
+            size: part.contents().len() as u32,
+            data: Some(part.contents().to_vec()),
+        });
+    }
+    
+    let has_attachments = !attachments.is_empty();
 
-    Ok(Message {
+    let msg = Message {
         id: id.to_string(),
         account_id: account_id.to_string(),
         mailbox_id: mailbox_id.to_string(),
@@ -67,7 +82,9 @@ pub fn parse_message(
         has_attachments,
         triage_score: None,
         ai_summary: None,
-    })
+    };
+
+    Ok((msg, attachments))
 }
 
 fn normalize_msgid(s: &str) -> String {

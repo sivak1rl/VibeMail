@@ -12,15 +12,33 @@
   border-right: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
+  transition: width 0.2s ease-in-out;
+}
+
+.sidebarCollapsed {
+  width: 60px;
 }
 
 .sidebarHeader {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--color-border);
 }
+
+.toggleBtn {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.toggleBtn:hover { color: var(--color-text); }
 
 .logo { font-size: 16px; font-weight: 700; color: var(--color-accent); }
 
@@ -111,15 +129,22 @@
   padding: 12px 16px;
   border-top: 1px solid var(--color-border);
   display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.statusMain {
+  display: flex;
   align-items: center;
   gap: 10px;
-  background: rgba(0, 0, 0, 0.1);
 }
 
 .statusSpinner {
   font-size: 14px;
   color: var(--color-accent);
   animation: spin 1.5s linear infinite;
+  flex-shrink: 0;
 }
 
 .statusText {
@@ -128,6 +153,21 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+}
+
+.progressBar {
+  width: 100%;
+  height: 4px;
+  background: var(--color-border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--color-accent);
+  transition: width 0.3s ease-out;
 }
 
 .listPane {
@@ -239,4 +279,28 @@
   min-width: 0;
   display: flex;
   overflow: hidden;
+}
+
+@media (max-width: 1024px) {
+  .sidebar {
+    width: 60px;
+  }
+  /* In CSS Modules, we can't easily reference other classes' children without :global or complex patterns,
+     but we can use the .sidebar.sidebarCollapsed pattern if we want.
+     For simplicity, let's assume we want it collapsed by default below 1024px. */
+}
+
+@media (max-width: 768px) {
+  .listPane {
+    width: 100%;
+    position: absolute;
+    z-index: 10;
+    background: var(--color-bg);
+    transform: translateX(0);
+    transition: transform 0.3s;
+  }
+  
+  .layout:has(.threadPane:not(:empty)) .listPane {
+    transform: translateX(-100%);
+  }
 }

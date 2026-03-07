@@ -15,6 +15,26 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         conn.execute("ALTER TABLE threads ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0", [])?;
     }
 
+    let has_has_attachments: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('threads') WHERE name='has_attachments'",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if has_has_attachments == 0 {
+        conn.execute("ALTER TABLE threads ADD COLUMN has_attachments INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+
+    let has_last_synced_at: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('mailboxes') WHERE name='last_synced_at'",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if has_last_synced_at == 0 {
+        conn.execute("ALTER TABLE mailboxes ADD COLUMN last_synced_at INTEGER", [])?;
+    }
+
     Ok(())
 }
 
@@ -36,11 +56,13 @@ CREATE TABLE IF NOT EXISTS mailboxes (
     account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
     name        TEXT NOT NULL,
     delimiter   TEXT,
-    flags       TEXT,           -- JSON array
-    uid_validity INTEGER,
-    uid_next    INTEGER,
+    flags           TEXT NOT NULL,          -- JSON array
+    uid_validity    INTEGER,
+    uid_next        INTEGER,
+    last_synced_at  INTEGER,
     UNIQUE(account_id, name)
-);
+    );
+
 
 CREATE TABLE IF NOT EXISTS messages (
     id              TEXT PRIMARY KEY,       -- <account_id>:<uid>
@@ -78,6 +100,7 @@ CREATE TABLE IF NOT EXISTS threads (
     message_count   INTEGER NOT NULL DEFAULT 1,
     unread_count    INTEGER NOT NULL DEFAULT 0,
     is_flagged      INTEGER NOT NULL DEFAULT 0,
+    has_attachments INTEGER NOT NULL DEFAULT 0,
     last_date       INTEGER,
     last_from       TEXT,
     triage_score    REAL,
@@ -93,7 +116,8 @@ CREATE TABLE IF NOT EXISTS attachments (
     filename    TEXT,
     content_type TEXT,
     size        INTEGER,
-    data        BLOB                        -- only stored for small attachments
+    data        BLOB,                       -- only stored for small attachments
+    UNIQUE(message_id, filename, size)
 );
 
 CREATE TABLE IF NOT EXISTS ai_config (

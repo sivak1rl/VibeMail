@@ -1,7 +1,8 @@
 use crate::db::{models::*, Database};
 use anyhow::Result;
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use serde_json;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct MailboxStats {
@@ -23,7 +24,10 @@ impl Database {
         self.conn.execute(
             r#"INSERT INTO accounts (id, name, email, provider, imap_host, imap_port, smtp_host, smtp_port)
                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-               ON CONFLICT(email) DO UPDATE SET name=excluded.name, provider=excluded.provider,
+               ON CONFLICT(id) DO UPDATE SET 
+               name=excluded.name, 
+               email=excluded.email,
+               provider=excluded.provider,
                imap_host=excluded.imap_host, imap_port=excluded.imap_port,
                smtp_host=excluded.smtp_host, smtp_port=excluded.smtp_port"#,
             rusqlite::params![
@@ -64,15 +68,20 @@ impl Database {
 
     pub fn upsert_mailbox(&self, mailbox: &Mailbox) -> Result<()> {
         self.conn.execute(
-            r#"INSERT INTO mailboxes (id, account_id, name, delimiter, flags, uid_validity, uid_next)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-               ON CONFLICT(account_id, name) DO UPDATE SET
-               flags=excluded.flags, uid_validity=excluded.uid_validity, uid_next=excluded.uid_next"#,
+            r#"INSERT INTO mailboxes (id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+               ON CONFLICT(id) DO UPDATE SET
+               flags=excluded.flags, 
+               delimiter=excluded.delimiter,
+               uid_validity=excluded.uid_validity, 
+               uid_next=excluded.uid_next,
+               last_synced_at=excluded.last_synced_at"#,
             rusqlite::params![
                 mailbox.id, mailbox.account_id, mailbox.name, mailbox.delimiter,
                 serde_json::to_string(&mailbox.flags)?,
                 mailbox.uid_validity.map(|v| v as i64),
                 mailbox.uid_next.map(|v| v as i64),
+                mailbox.last_synced_at.map(|d| d.timestamp()),
             ],
         )?;
         Ok(())
@@ -80,7 +89,7 @@ impl Database {
 
     pub fn get_mailbox_by_name(&self, account_id: &str, name: &str) -> Result<Option<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next
+            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at
              FROM mailboxes WHERE account_id=?1 AND name=?2",
         )?;
         let mut rows = stmt.query(rusqlite::params![account_id, name])?;
@@ -93,6 +102,9 @@ impl Database {
                 flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
                 uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                 uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                last_synced_at: row
+                    .get::<_, Option<i64>>(7)?
+                    .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
             }))
         } else {
             Ok(None)
@@ -101,7 +113,7 @@ impl Database {
 
     pub fn list_mailboxes(&self, account_id: &str) -> Result<Vec<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next
+            r#"SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at
                FROM mailboxes
                WHERE account_id=?1
                ORDER BY CASE WHEN UPPER(name) = 'INBOX' THEN 0 ELSE 1 END, name COLLATE NOCASE"#,
@@ -116,6 +128,9 @@ impl Database {
                     flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
                     uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                     uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                    last_synced_at: row
+                        .get::<_, Option<i64>>(7)?
+                        .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -124,7 +139,7 @@ impl Database {
 
     pub fn list_mailboxes_with_counts(&self, account_id: &str) -> Result<Vec<MailboxStats>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next,
+            r#"SELECT mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next, mb.last_synced_at,
                COUNT(DISTINCT m.thread_id) AS thread_count,
                COUNT(DISTINCT CASE
                  WHEN m.thread_id IS NOT NULL
@@ -134,7 +149,7 @@ impl Database {
                FROM mailboxes mb
                LEFT JOIN messages m ON m.mailbox_id = mb.id
                WHERE mb.account_id=?1
-               GROUP BY mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next
+               GROUP BY mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next, mb.last_synced_at
                ORDER BY CASE WHEN UPPER(mb.name) = 'INBOX' THEN 0 ELSE 1 END, mb.name COLLATE NOCASE"#,
         )?;
         let mailboxes = stmt
@@ -148,9 +163,12 @@ impl Database {
                         flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
                         uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                         uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                        last_synced_at: row
+                            .get::<_, Option<i64>>(7)?
+                            .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
                     },
-                    thread_count: row.get::<_, i64>(7)? as u32,
-                    unread_count: row.get::<_, i64>(8)? as u32,
+                    thread_count: row.get::<_, i64>(8)? as u32,
+                    unread_count: row.get::<_, i64>(9)? as u32,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -159,7 +177,7 @@ impl Database {
 
     pub fn get_mailbox_by_id(&self, account_id: &str, mailbox_id: &str) -> Result<Option<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next
+            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at
              FROM mailboxes WHERE account_id=?1 AND id=?2",
         )?;
         let mut rows = stmt.query(rusqlite::params![account_id, mailbox_id])?;
@@ -172,10 +190,21 @@ impl Database {
                 flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
                 uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
                 uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+                last_synced_at: row
+                    .get::<_, Option<i64>>(7)?
+                    .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
             }))
         } else {
             Ok(None)
         }
+    }
+
+    pub fn get_mailbox_oldest_date(&self, mailbox_id: &str) -> Result<Option<DateTime<Utc>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT MIN(date) FROM messages WHERE mailbox_id=?1",
+        )?;
+        let date: Option<i64> = stmt.query_row([mailbox_id], |row| row.get(0))?;
+        Ok(date.map(|ts| Utc.timestamp_opt(ts, 0).unwrap()))
     }
 
     pub fn upsert_message(&self, msg: &Message) -> Result<()> {
@@ -185,7 +214,7 @@ impl Database {
                 date, body_text, body_html, references_ids, in_reply_to, flags, has_attachments,
                 triage_score, ai_summary)
                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
-               ON CONFLICT(account_id, mailbox_id, uid) DO UPDATE SET
+               ON CONFLICT(id) DO UPDATE SET
                message_id=excluded.message_id, thread_id=excluded.thread_id,
                subject=excluded.subject, "from"=excluded."from", "to"=excluded."to",
                cc=excluded.cc, date=excluded.date, body_text=excluded.body_text,
@@ -223,24 +252,26 @@ impl Database {
     pub fn upsert_thread(&self, thread: &Thread) -> Result<()> {
         self.conn.execute(
             r#"INSERT INTO threads
-               (id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, last_date, last_from, triage_score, labels)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+               (id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, has_attachments, last_date, last_from, triage_score, labels)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
                ON CONFLICT(id) DO UPDATE SET
-               subject=excluded.subject, participant_ids=excluded.participant_ids,
-               message_count=excluded.message_count, unread_count=excluded.unread_count,
+               subject=excluded.subject,
+               participant_ids=excluded.participant_ids,
+               message_count=excluded.message_count,
+               unread_count=excluded.unread_count,
                is_flagged=excluded.is_flagged,
-               last_date=excluded.last_date, last_from=excluded.last_from,
-               triage_score=COALESCE(excluded.triage_score, threads.triage_score),
-               labels=CASE
-                 WHEN excluded.labels = '[]' THEN COALESCE(threads.labels, excluded.labels)
-                 ELSE excluded.labels
-               END,
+               has_attachments=excluded.has_attachments,
+               last_date=excluded.last_date,
+               last_from=excluded.last_from,
+               triage_score=excluded.triage_score,
+               labels=excluded.labels,
                updated_at=unixepoch()"#,
             rusqlite::params![
                 thread.id, thread.account_id, thread.subject,
                 serde_json::to_string(&thread.participants)?,
                 thread.message_count as i64, thread.unread_count as i64,
                 thread.is_flagged as i64,
+                thread.has_attachments as i64,
                 thread.last_date.map(|d| d.timestamp()),
                 thread.last_from,
                 thread.triage_score,
@@ -267,12 +298,13 @@ impl Database {
                 message_count: row.get::<_, i64>(4)? as u32,
                 unread_count: row.get::<_, i64>(5)? as u32,
                 is_flagged: row.get::<_, i64>(6)? != 0,
+                has_attachments: row.get::<_, i64>(7)? != 0,
                 last_date: row
-                    .get::<_, Option<i64>>(7)?
+                    .get::<_, Option<i64>>(8)?
                     .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
-                last_from: row.get(8)?,
-                triage_score: row.get(9)?,
-                labels: serde_json::from_str(&row.get::<_, String>(10).unwrap_or_default())
+                last_from: row.get(9)?,
+                triage_score: row.get(10)?,
+                labels: serde_json::from_str(&row.get::<_, String>(11).unwrap_or_default())
                     .unwrap_or_default(),
                 messages: None,
             })
@@ -283,7 +315,7 @@ impl Database {
         let threads = if let Some(mailbox_id) = mailbox_id {
             let mut stmt = self.conn.prepare(
                 r#"SELECT t.id, t.account_id, t.subject, t.participant_ids, t.message_count,
-                   t.unread_count, t.is_flagged, t.last_date, t.last_from, t.triage_score, t.labels
+                   t.unread_count, t.is_flagged, t.has_attachments, t.last_date, t.last_from, t.triage_score, t.labels
                    FROM threads t
                    WHERE t.account_id=?1
                      AND EXISTS (
@@ -300,7 +332,7 @@ impl Database {
         } else {
             let mut stmt = self.conn.prepare(
                 r#"SELECT id, account_id, subject, participant_ids, message_count, unread_count,
-                   is_flagged, last_date, last_from, triage_score, labels
+                   is_flagged, has_attachments, last_date, last_from, triage_score, labels
                    FROM threads WHERE account_id=?1
                    ORDER BY last_date DESC LIMIT ?2 OFFSET ?3"#,
             )?;
@@ -597,39 +629,78 @@ impl Database {
         account_id: &str,
         mailbox_id: Option<&str>,
         limit: u32,
+        offset: u32,
     ) -> Result<Vec<String>> {
+        let (fts_query, filters) = parse_query(query);
         let limit = limit as i64;
-        let ids = if let Some(mailbox_id) = mailbox_id {
-            let mut stmt = self.conn.prepare(
-                r#"SELECT m.thread_id FROM messages m
-                   JOIN messages_fts fts ON m.rowid = fts.rowid
-                   WHERE fts.messages_fts MATCH ?1 AND m.account_id=?2 AND m.mailbox_id=?3
-                   GROUP BY m.thread_id ORDER BY MAX(rank) LIMIT ?4"#,
-            )?;
-            let rows = stmt.query_map(
-                rusqlite::params![query, account_id, mailbox_id, limit],
-                |row| row.get::<_, Option<String>>(0),
-            )?;
-            rows.filter_map(|r| r.ok().flatten()).collect()
+        let offset = offset as i64;
+
+        let mut sql = "SELECT m.thread_id FROM messages m ".to_string();
+        if !fts_query.is_empty() {
+            sql.push_str("JOIN messages_fts fts ON m.rowid = fts.rowid ");
+        }
+        sql.push_str("WHERE m.account_id = ? ");
+
+        let mut params: Vec<rusqlite::types::Value> = vec![account_id.to_string().into()];
+
+        if let Some(mid) = mailbox_id {
+            sql.push_str("AND m.mailbox_id = ? ");
+            params.push(mid.to_string().into());
+        }
+
+        if !fts_query.is_empty() {
+            sql.push_str("AND fts.messages_fts MATCH ? ");
+            params.push(fts_query.clone().into());
+        }
+
+        if let Some(from) = filters.from {
+            sql.push_str("AND m.\"from\" LIKE ? ");
+            params.push(format!("%{}%", from).into());
+        }
+
+        if let Some(to) = filters.to {
+            sql.push_str("AND m.\"to\" LIKE ? ");
+            params.push(format!("%{}%", to).into());
+        }
+
+        if let Some(unread) = filters.unread {
+            if unread {
+                sql.push_str("AND instr(COALESCE(m.flags, ''), '\\Seen') = 0 ");
+            } else {
+                sql.push_str("AND instr(COALESCE(m.flags, ''), '\\Seen') > 0 ");
+            }
+        }
+
+        if let Some(has_attachment) = filters.has_attachment {
+            sql.push_str("AND m.has_attachments = ? ");
+            params.push((if has_attachment { 1 } else { 0 }).into());
+        }
+
+        sql.push_str("GROUP BY m.thread_id ");
+        
+        if !fts_query.is_empty() {
+            sql.push_str("ORDER BY MAX(rank) LIMIT ? OFFSET ?");
         } else {
-            let mut stmt = self.conn.prepare(
-                r#"SELECT m.thread_id FROM messages m
-                   JOIN messages_fts fts ON m.rowid = fts.rowid
-                   WHERE fts.messages_fts MATCH ?1 AND m.account_id=?2
-                   GROUP BY m.thread_id ORDER BY MAX(rank) LIMIT ?3"#,
-            )?;
-            let rows = stmt.query_map(rusqlite::params![query, account_id, limit], |row| {
-                row.get::<_, Option<String>>(0)
-            })?;
-            rows.filter_map(|r| r.ok().flatten()).collect()
-        };
-        Ok(ids)
+            sql.push_str("ORDER BY MAX(m.date) DESC LIMIT ? OFFSET ?");
+        }
+        
+        params.push(limit.into());
+        params.push(offset.into());
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        println!(">>> FTS SQL: {}", sql);
+        println!(">>> FTS Params: {:?}", params);
+        let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+            row.get::<_, Option<String>>(0)
+        })?;
+
+        Ok(rows.filter_map(|r| r.ok().flatten()).collect())
     }
 
     pub fn get_threads_by_ids(
         &self,
         ids: &[String],
-        mailbox_id: Option<&str>,
+        _mailbox_id: Option<&str>,
     ) -> Result<Vec<Thread>> {
         if ids.is_empty() {
             return Ok(vec![]);
@@ -640,26 +711,13 @@ impl Database {
             .map(|(i, _)| format!("?{}", i + 1))
             .collect::<Vec<_>>()
             .join(",");
-        let sql = if mailbox_id.is_some() {
-            format!(
-                "SELECT t.id, t.account_id, t.subject, t.participant_ids, t.message_count, t.unread_count, t.is_flagged, t.last_date, t.last_from, t.triage_score, t.labels
-                 FROM threads t
-                 WHERE t.id IN ({})
-                   AND EXISTS (
-                     SELECT 1 FROM messages m
-                     WHERE m.thread_id = t.id AND m.mailbox_id = ?{}
-                   )
-                 ORDER BY t.last_date DESC",
-                placeholders,
-                ids.len() + 1
-            )
-        } else {
-            format!(
-                "SELECT id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, last_date, last_from, triage_score, labels
-                 FROM threads WHERE id IN ({}) ORDER BY last_date DESC",
-                placeholders
-            )
-        };
+        
+        let sql = format!(
+            "SELECT id, account_id, subject, participant_ids, message_count, unread_count, is_flagged, has_attachments, last_date, last_from, triage_score, labels
+             FROM threads WHERE id IN ({}) ORDER BY last_date DESC",
+            placeholders
+        );
+
         let map_thread = |row: &rusqlite::Row<'_>| {
             Ok(Thread {
                 id: row.get(0)?,
@@ -670,31 +728,156 @@ impl Database {
                 message_count: row.get::<_, i64>(4)? as u32,
                 unread_count: row.get::<_, i64>(5)? as u32,
                 is_flagged: row.get::<_, i64>(6)? != 0,
+                has_attachments: row.get::<_, i64>(7)? != 0,
                 last_date: row
-                    .get::<_, Option<i64>>(7)?
+                    .get::<_, Option<i64>>(8)?
                     .map(|ts| chrono::Utc.timestamp_opt(ts, 0).unwrap()),
-                last_from: row.get(8)?,
-                triage_score: row.get(9)?,
-                labels: serde_json::from_str(&row.get::<_, String>(10).unwrap_or_default())
+                last_from: row.get(9)?,
+                triage_score: row.get(10)?,
+                labels: serde_json::from_str(&row.get::<_, String>(11).unwrap_or_default())
                     .unwrap_or_default(),
                 messages: None,
             })
         };
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let threads = if let Some(mailbox_id) = mailbox_id {
-            let mut params: Vec<&dyn rusqlite::ToSql> =
-                ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-            params.push(&mailbox_id);
-            let rows = stmt.query_map(params.as_slice(), map_thread)?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        let params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let rows = stmt.query_map(params.as_slice(), map_thread)?;
+        
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_message_attachments(&self, message_id: &str) -> Result<Vec<Attachment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, message_id, filename, content_type, size FROM attachments WHERE message_id=?1",
+        )?;
+        let rows = stmt.query_map([message_id], |row| {
+            Ok(Attachment {
+                id: row.get(0)?,
+                message_id: row.get(1)?,
+                filename: row.get(2)?,
+                content_type: row.get(3)?,
+                size: row.get::<_, i64>(4)? as u32,
+                data: None,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_messages_missing_attachments(&self, mailbox_id: &str) -> Result<Vec<u32>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uid FROM messages 
+             WHERE mailbox_id=?1 AND has_attachments=1
+             AND id NOT IN (SELECT DISTINCT message_id FROM attachments)",
+        )?;
+        let rows = stmt.query_map([mailbox_id], |row| row.get::<_, i64>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).map(|u| u as u32).collect())
+    }
+
+    pub fn get_thread_attachments(&self, thread_id: &str) -> Result<Vec<Attachment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT a.id, a.message_id, a.filename, a.content_type, a.size 
+             FROM attachments a
+             JOIN messages m ON a.message_id = m.id
+             WHERE m.thread_id=?1
+             GROUP BY a.filename, a.size",
+        )?;
+        let rows = stmt.query_map([thread_id], |row| {
+            Ok(Attachment {
+                id: row.get(0)?,
+                message_id: row.get(1)?,
+                filename: row.get(2)?,
+                content_type: row.get(3)?,
+                size: row.get::<_, i64>(4)? as u32,
+                data: None,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_attachment_by_id(&self, id: &str) -> Result<Option<Attachment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, message_id, filename, content_type, size, data FROM attachments WHERE id=?1",
+        )?;
+        let mut rows = stmt.query([id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(Attachment {
+                id: row.get(0)?,
+                message_id: row.get(1)?,
+                filename: row.get(2)?,
+                content_type: row.get(3)?,
+                size: row.get::<_, i64>(4)? as u32,
+                data: row.get(5)?,
+            }))
         } else {
-            let params: Vec<&dyn rusqlite::ToSql> =
-                ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
-            let rows = stmt.query_map(params.as_slice(), map_thread)?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        Ok(threads)
+            Ok(None)
+        }
+    }
+
+    pub fn upsert_attachment(&self, att: &Attachment) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO attachments (id, message_id, filename, content_type, size, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(message_id, filename, size) DO UPDATE SET
+             id=excluded.id, content_type=excluded.content_type, data=excluded.data",
+            rusqlite::params![
+                att.id,
+                att.message_id,
+                att.filename,
+                att.content_type,
+                att.size as i64,
+                att.data
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_message_attachments(&self, message_id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM attachments WHERE message_id=?1", [message_id])?;
+        Ok(())
+    }
+
+    pub fn get_counts(&self) -> Result<HashMap<String, i64>> {
+        let mut counts = HashMap::new();
+        counts.insert("accounts".to_string(), self.conn.query_row("SELECT count(*) FROM accounts", [], |r| r.get(0))?);
+        counts.insert("mailboxes".to_string(), self.conn.query_row("SELECT count(*) FROM mailboxes", [], |r| r.get(0))?);
+        counts.insert("threads".to_string(), self.conn.query_row("SELECT count(*) FROM threads", [], |r| r.get(0))?);
+        counts.insert("messages".to_string(), self.conn.query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?);
+        counts.insert("attachments".to_string(), self.conn.query_row("SELECT count(*) FROM attachments", [], |r| r.get(0))?);
+        Ok(counts)
+    }
+
+    pub fn delete_all_attachments(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM attachments", [])?;
+        Ok(())
+    }
+
+    pub fn wipe_data(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM attachments", [])?;
+        self.conn.execute("DELETE FROM thread_actions", [])?;
+        self.conn.execute("DELETE FROM thread_embeddings", [])?;
+        self.conn.execute("DELETE FROM messages", [])?;
+        self.conn.execute("DELETE FROM threads", [])?;
+        self.conn.execute("DELETE FROM mailboxes", [])?;
+        // Preservation of accounts table as requested
+        Ok(())
+    }
+
+    pub fn drop_tables(&mut self) -> Result<()> {
+        // We drop in reverse order of dependencies
+        self.conn.execute("DROP TABLE IF EXISTS attachments", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS messages_fts", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS thread_embeddings", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS thread_actions", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS messages", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS threads", [])?;
+        self.conn.execute("DROP TABLE IF EXISTS mailboxes", [])?;
+        
+        // Re-run migrations to recreate them
+        crate::db::schema::run_migrations(&mut self.conn)?;
+        Ok(())
     }
 
     pub fn upsert_thread_embedding(
@@ -724,6 +907,7 @@ impl Database {
         query_embedding: &[f32],
         model: &str,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<(String, f32)>> {
         let mut stmt = self.conn.prepare(
             "SELECT e.thread_id, e.embedding
@@ -761,8 +945,10 @@ impl Database {
             tracing::info!("Top semantic match: {} (score: {:.4})", results[0].0, results[0].1);
         }
         
-        results.truncate(limit);
-        Ok(results)
+        // Apply offset and limit manually for now since we sort in memory
+        let start = offset.min(results.len());
+        let end = (offset + limit).min(results.len());
+        Ok(results[start..end].to_vec())
     }
 }
 
@@ -783,6 +969,43 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         return 0.0;
     }
     dot / (norm_a.sqrt() * norm_b.sqrt())
+}
+
+#[derive(Default)]
+struct SearchFilters {
+    from: Option<String>,
+    to: Option<String>,
+    unread: Option<bool>,
+    has_attachment: Option<bool>,
+}
+
+fn parse_query(query: &str) -> (String, SearchFilters) {
+    let mut fts_parts = Vec::new();
+    let mut filters = SearchFilters::default();
+
+    for part in query.split_whitespace() {
+        if let Some(from) = part.strip_prefix("from:") {
+            filters.from = Some(from.to_string());
+        } else if let Some(to) = part.strip_prefix("to:") {
+            filters.to = Some(to.to_string());
+        } else if let Some(is) = part.strip_prefix("is:") {
+            match is {
+                "unread" => filters.unread = Some(true),
+                "read" => filters.unread = Some(false),
+                _ => fts_parts.push(part),
+            }
+        } else if let Some(has) = part.strip_prefix("has:") {
+            if has == "attachment" {
+                filters.has_attachment = Some(true);
+            } else {
+                fts_parts.push(part);
+            }
+        } else {
+            fts_parts.push(part);
+        }
+    }
+
+    (fts_parts.join(" "), filters)
 }
 
 #[cfg(test)]
