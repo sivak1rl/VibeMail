@@ -12,6 +12,7 @@ VibeMail is an **AI-Native Desktop Email Client** built with [Tauri 2](https://v
 - [[Build and Packaging]]: How to set up your dev environment and build for your OS.
 - [[AI Integration]]: Configuring Ollama or OpenAI-compatible endpoints.
 - [[Architecture]]: Understanding the Rust backend and React frontend interaction.
+- [[Coming Soon]]: Our roadmap for future features and improvements.
 
 ## Features
 - **Multi-account IMAP/SMTP**: Gmail, Outlook, and generic IMAP support.
