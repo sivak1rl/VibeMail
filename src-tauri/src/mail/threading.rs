@@ -1,7 +1,7 @@
 /// JWZ threading algorithm (RFC 5256)
 /// Groups messages into threads based on Message-ID, References, and In-Reply-To headers.
 use crate::db::models::{Message, Thread};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use uuid::Uuid;
 
 struct ThreadNode {
@@ -128,6 +128,14 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
         participants.dedup_by(|a, b| a.email == b.email);
 
         let count = thread_messages.len() as u32;
+        let labels = thread_messages
+            .iter()
+            .flat_map(|m| m.flags.iter())
+            .filter_map(|flag| flag.strip_prefix("VibeMail/").map(|s| s.to_string()))
+            .filter(|label| !label.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
 
         threads.push(Thread {
             id: thread_id.clone(),
@@ -142,7 +150,7 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
                 .iter()
                 .filter_map(|m| m.triage_score)
                 .reduce(f64::max),
-            labels: Vec::new(),
+            labels,
             messages: Some(thread_messages),
         });
     }

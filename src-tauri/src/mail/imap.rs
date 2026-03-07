@@ -2,9 +2,11 @@ use crate::auth::{keychain, oauth};
 use crate::db::{models::*, Database};
 use crate::mail::{parser, threading};
 use anyhow::{anyhow, Result};
+use async_imap::imap_proto::types::{AttributeValue, Response, Status};
 use async_imap::{types::Flag, Client};
 use async_native_tls::TlsConnector;
 use futures::TryStreamExt;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
@@ -202,10 +204,15 @@ pub async fn sync_mailbox(
                 .await?
                 .try_collect()
                 .await?;
+            let gmail_labels = if account.provider == "gmail" {
+                fetch_gmail_vibemail_labels(session, &uid_range).await?
+            } else {
+                HashMap::new()
+            };
 
             cursor = batch_start.saturating_sub(1);
             // Process this batch (continues below via shared parsing code)
-            let batch_messages = parse_fetches(&fetches, account, mailbox);
+            let batch_messages = parse_fetches(&fetches, account, mailbox, &gmail_labels);
             if !batch_messages.is_empty() {
                 persist_batch(&batch_messages, account, mailbox, &db).await?;
             }
@@ -238,8 +245,13 @@ pub async fn sync_mailbox(
                 .await?
                 .try_collect()
                 .await?;
+            let gmail_labels = if account.provider == "gmail" {
+                fetch_gmail_vibemail_labels(session, &uid_range).await?
+            } else {
+                HashMap::new()
+            };
 
-            let batch_messages = parse_fetches(&fetches, account, mailbox);
+            let batch_messages = parse_fetches(&fetches, account, mailbox, &gmail_labels);
             if !batch_messages.is_empty() {
                 persist_batch(&batch_messages, account, mailbox, &db).await?;
             }
@@ -268,6 +280,7 @@ fn parse_fetches(
     fetches: &[async_imap::types::Fetch],
     account: &Account,
     mailbox: &Mailbox,
+    gmail_labels: &HashMap<u32, Vec<String>>,
 ) -> Vec<Message> {
     let mut messages = Vec::new();
     for fetch in fetches {
@@ -287,6 +300,9 @@ fn parse_fetches(
                     .map(|f| flag_to_string(&f))
                     .filter(|s| !s.is_empty())
                     .collect();
+                if let Some(labels) = gmail_labels.get(&uid) {
+                    msg.flags.extend(labels.iter().cloned());
+                }
                 messages.push(msg);
             }
             Err(e) => warn!("Failed to parse uid={}: {}", uid, e),
@@ -334,4 +350,62 @@ pub async fn list_mailboxes(session: &mut ImapSession, account_id: &str) -> Resu
         })
         .collect();
     Ok(mailboxes)
+}
+
+async fn fetch_gmail_vibemail_labels(
+    session: &mut ImapSession,
+    uid_range: &str,
+) -> Result<HashMap<u32, Vec<String>>> {
+    let mut labels_by_uid: HashMap<u32, Vec<String>> = HashMap::new();
+    let cmd = format!("UID FETCH {} (UID X-GM-LABELS)", uid_range);
+    let request_id = session.run_command(&cmd).await?;
+
+    loop {
+        let response = session
+            .read_response()
+            .await
+            .ok_or_else(|| anyhow!("IMAP connection lost while fetching Gmail labels"))??;
+        match response.parsed() {
+            Response::Fetch(_, attrs) => {
+                let mut uid: Option<u32> = None;
+                let mut labels = Vec::new();
+                for attr in attrs {
+                    match attr {
+                        AttributeValue::Uid(value) => uid = Some(*value),
+                        AttributeValue::GmailLabels(values) => {
+                            labels.extend(
+                                values
+                                    .iter()
+                                    .map(|value| value.as_ref().to_string())
+                                    .filter_map(parse_vibemail_label),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(uid) = uid {
+                    labels_by_uid.insert(uid, labels);
+                }
+            }
+            Response::Done { tag, status, .. } if tag == &request_id => match status {
+                Status::Ok => break,
+                Status::No | Status::Bad => {
+                    return Err(anyhow!("IMAP UID FETCH X-GM-LABELS failed"));
+                }
+                _ => break,
+            },
+            _ => {}
+        }
+    }
+
+    Ok(labels_by_uid)
+}
+
+fn parse_vibemail_label(raw: String) -> Option<String> {
+    let trimmed = raw.trim_matches('"');
+    let value = trimmed.strip_prefix("VibeMail/")?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(value.to_string())
 }
