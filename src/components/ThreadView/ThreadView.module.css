@@ -3,6 +3,68 @@
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  position: relative;
+}
+
+.expanded {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2vh 2vw;
+  backdrop-filter: blur(4px);
+  transition: all 0.3s ease-in-out;
+  opacity: 1;
+}
+
+.expanded .main {
+  max-width: 1400px;
+  width: 100%;
+  height: 100%;
+  background: var(--color-bg);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.8);
+  border: 1px solid var(--color-border);
+  animation: popIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.aiPanelWrapper {
+  display: flex;
+  height: 100%;
+}
+
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.expandBtn {
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.expandBtn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: rgba(79, 142, 247, 0.05);
 }
 
 .main {
@@ -28,6 +90,52 @@
   padding: 16px 20px 12px;
   border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+  flex-shrink: 0;
+}
+
+.toolbarBtn {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.toolbarBtn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: rgba(79, 142, 247, 0.05);
+}
+
+.toolbarBtnActive {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: rgba(79, 142, 247, 0.1);
+}
+
+.toolbarBtnStarActive {
+  color: #f1c40f;
+  border-color: #f1c40f;
+  background: rgba(241, 196, 15, 0.1);
+}
+.toolbarBtnStarActive:hover {
+  border-color: #f39c12;
+  color: #f39c12;
 }
 
 .subject {

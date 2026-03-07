@@ -3,6 +3,18 @@ use rusqlite::Connection;
 
 pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     conn.execute_batch(SCHEMA)?;
+
+    // Manual migrations for schema updates
+    let has_is_flagged: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('threads') WHERE name='is_flagged'",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if has_is_flagged == 0 {
+        conn.execute("ALTER TABLE threads ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+
     Ok(())
 }
 
@@ -65,6 +77,7 @@ CREATE TABLE IF NOT EXISTS threads (
     participant_ids TEXT,                   -- JSON array of email addresses
     message_count   INTEGER NOT NULL DEFAULT 1,
     unread_count    INTEGER NOT NULL DEFAULT 0,
+    is_flagged      INTEGER NOT NULL DEFAULT 0,
     last_date       INTEGER,
     last_from       TEXT,
     triage_score    REAL,

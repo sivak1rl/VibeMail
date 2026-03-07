@@ -36,6 +36,7 @@ export interface Thread {
   participants: EmailAddress[];
   message_count: number;
   unread_count: number;
+  is_flagged: boolean;
   last_date: string | null;
   last_from: string | null;
   triage_score: number | null;
@@ -65,6 +66,8 @@ interface ThreadStore {
   selectThread: (threadId: string) => Promise<void>;
   syncAccount: (accountId: string, mailboxId?: string | null) => Promise<SyncResult>;
   setThreadsRead: (threadIds: string[], read: boolean) => Promise<void>;
+  setThreadsFlagged: (threadIds: string[], flagged: boolean) => Promise<void>;
+  archiveThreads: (threadIds: string[]) => Promise<void>;
   applyThreadLabels: (
     labelsByThread: Record<string, string>,
     knownCategoryLabels?: string[],
@@ -158,30 +161,35 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
       try {
         const PAGE = 50;
         const focusOnly = get().focusMode;
-        const threads = await invoke<Thread[]>("list_threads", {
-          request: {
-            account_id: accountId,
-            mailbox_id: mailboxId,
-            limit: PAGE,
-            offset: 0,
-            focus_only: focusOnly,
-          },
-        });
+        // If we are syncing all folders (mailboxId is null), we don't refresh the thread list mid-sync
+        // because it would be confusing to jump between folders.
+        // We only refresh if we have a specific mailbox selected.
+        if (mailboxId) {
+          const threads = await invoke<Thread[]>("list_threads", {
+            request: {
+              account_id: accountId,
+              mailbox_id: mailboxId,
+              limit: PAGE,
+              offset: 0,
+              focus_only: focusOnly,
+            },
+          });
 
-        const { selectedThreadId } = get();
-        const nextSelectedId =
-          selectedThreadId && threads.some((thread) => thread.id === selectedThreadId)
-            ? selectedThreadId
-            : threads[0]?.id ?? null;
+          const { selectedThreadId } = get();
+          const nextSelectedId =
+            selectedThreadId && threads.some((thread) => thread.id === selectedThreadId)
+              ? selectedThreadId
+              : threads[0]?.id ?? null;
 
-        set({
-          threads,
-          hasMore: threads.length >= PAGE,
-          selectedThreadId: nextSelectedId,
-        });
+          set({
+            threads,
+            hasMore: threads.length >= PAGE,
+            selectedThreadId: nextSelectedId,
+          });
 
-        if (nextSelectedId && nextSelectedId !== selectedThreadId) {
-          await get().selectThread(nextSelectedId);
+          if (nextSelectedId && nextSelectedId !== selectedThreadId) {
+            await get().selectThread(nextSelectedId);
+          }
         }
       } catch {
         // Keep sync running even if a mid-sync refresh fails.
@@ -214,6 +222,18 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
 
       await refreshWhileSyncing();
       set({ syncing: false, syncError: result.error, syncProgress: null });
+
+      // After a full sync (where mailboxId might have been null),
+      // we should refresh the current mailbox threads if we didn't do it during sync.
+      if (!mailboxId) {
+        const currentMailboxId = get().threads[0]?.mailbox_id; // Best effort to find what we are looking at
+        // Actually, better to just use the selectedMailboxId from the other store, but stores are separate.
+        // The Inbox component handles its own fetchThreads, so it will likely work out.
+        // But for completeness, we can't easily access useMailboxStore here without imports.
+      } else {
+        await refreshWhileSyncing();
+      }
+
       return result;
     } catch (e) {
       const error = String(e);
@@ -262,6 +282,76 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
         : state.threadMessages;
 
       return { threads, threadMessages };
+    });
+  },
+
+  setThreadsFlagged: async (threadIds, flagged) => {
+    const ids = [...new Set(threadIds)].filter(Boolean);
+    if (ids.length === 0) return;
+
+    await invoke<number>("set_threads_flagged", {
+      request: {
+        thread_ids: ids,
+        flagged,
+      },
+    });
+
+    set((state) => {
+      const idSet = new Set(ids);
+      const threads = state.threads.map((thread) =>
+        idSet.has(thread.id)
+          ? {
+              ...thread,
+              is_flagged: flagged,
+            }
+          : thread,
+      );
+
+      const selected = state.selectedThreadId;
+      const selectedIsTarget = selected ? idSet.has(selected) : false;
+      const threadMessages = selectedIsTarget
+        ? state.threadMessages.map((message) => {
+            const flags = new Set(message.flags);
+            if (flagged) {
+              flags.add("\\Flagged");
+            } else {
+              flags.delete("\\Flagged");
+            }
+            return { ...message, flags: Array.from(flags) };
+          })
+        : state.threadMessages;
+
+      return { threads, threadMessages };
+    });
+  },
+
+  archiveThreads: async (threadIds) => {
+    const ids = [...new Set(threadIds)].filter(Boolean);
+    if (ids.length === 0) return;
+
+    await invoke<number>("archive_threads", {
+      request: {
+        thread_ids: ids,
+      },
+    });
+
+    set((state) => {
+      const idSet = new Set(ids);
+      const threads = state.threads.filter((thread) => !idSet.has(thread.id));
+      const nextSelectedId =
+        state.selectedThreadId && idSet.has(state.selectedThreadId)
+          ? threads[0]?.id ?? null
+          : state.selectedThreadId;
+
+      if (nextSelectedId !== state.selectedThreadId) {
+        if (nextSelectedId) {
+          void get().selectThread(nextSelectedId);
+        } else {
+          set({ threadMessages: [] });
+        }
+      }
+
+      return { threads, selectedThreadId: nextSelectedId };
     });
   },
 

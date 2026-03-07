@@ -77,6 +77,10 @@ export default function Settings({ onBack }: Props) {
     );
   };
 
+  const scrollTo = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+  };
+
   return (
     <div className={styles.page}>
       <div className={styles.header}>
@@ -84,201 +88,212 @@ export default function Settings({ onBack }: Props) {
         <h1 className={styles.title}>Settings</h1>
       </div>
 
-      <div className={styles.content}>
-        {/* Accounts */}
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Accounts</h2>
-          {accounts.length === 0 && (
-            <p className={styles.muted}>No accounts configured.</p>
-          )}
-          {accounts.map((acc) => (
-            <div key={acc.id} className={styles.accountRow}>
-              <div>
-                <div className={styles.accountEmail}>{acc.email}</div>
-                <div className={styles.accountProvider}>{acc.provider}</div>
+      <div className={styles.container}>
+        <aside className={styles.sidebar}>
+          <button className={styles.navLink} onClick={() => scrollTo("accounts")}>Accounts</button>
+          <button className={styles.navLink} onClick={() => scrollTo("ai")}>AI Provider</button>
+          <button className={styles.navLink} onClick={() => scrollTo("privacy")}>Privacy</button>
+          <button className={styles.navLink} onClick={() => scrollTo("sync")}>Sync</button>
+          <button className={styles.navLink} onClick={() => scrollTo("categories")}>Custom Categories</button>
+
+          <div style={{ flex: 1 }} />
+          <button className={styles.saveBtn} onClick={handleSave}>
+            {saved ? "Saved ✓" : "Save Settings"}
+          </button>
+        </aside>
+
+        <div className={styles.content}>
+          {/* Accounts */}
+          <section id="accounts" className={styles.section}>
+            <h2 className={styles.sectionTitle}>Accounts</h2>
+            {accounts.length === 0 && (
+              <p className={styles.muted}>No accounts configured.</p>
+            )}
+            {accounts.map((acc) => (
+              <div key={acc.id} className={styles.accountRow}>
+                <div>
+                  <div className={styles.accountEmail}>{acc.email}</div>
+                  <div className={styles.accountProvider}>{acc.provider}</div>
+                </div>
+                <button
+                  className={styles.removeBtn}
+                  onClick={() => removeAccount(acc.id)}
+                >
+                  Remove
+                </button>
               </div>
-              <button
-                className={styles.removeBtn}
-                onClick={() => removeAccount(acc.id)}
-              >
-                Remove
-              </button>
-            </div>
-          ))}
-        </section>
+            ))}
+          </section>
 
-        {/* AI */}
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>AI Provider</h2>
+          {/* AI */}
+          <section id="ai" className={styles.section}>
+            <h2 className={styles.sectionTitle}>AI Provider</h2>
 
-          <label className={styles.label}>
-            Provider
-            <select className={styles.select} value={form.provider} onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value }))}>
-              {PROVIDERS.map((p) => (
-                <option key={p.value} value={p.value}>{p.label}</option>
-              ))}
-            </select>
-          </label>
-
-          <label className={styles.label}>
-            Base URL
-            <input className={styles.input} type="text" {...field("base_url")} />
-          </label>
-
-          {form.provider === "openai_compat" && (
             <label className={styles.label}>
-              API Key
-              <input
-                className={styles.input}
-                type="password"
-                placeholder="sk-... (stored in OS keychain)"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
+              Provider
+              <select className={styles.select} value={form.provider} onChange={(e) => setForm((f) => ({ ...f, provider: e.target.value }))}>
+                {PROVIDERS.map((p) => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
+              </select>
             </label>
-          )}
 
-          <h3 className={styles.subTitle}>Model Assignments</h3>
+            <label className={styles.label}>
+              Base URL
+              <input className={styles.input} type="text" {...field("base_url")} />
+            </label>
 
-          <label className={styles.label}>
-            Triage / Fast tasks
-            <input className={styles.input} type="text" {...field("model_triage")} />
-          </label>
-          <label className={styles.label}>
-            Summarization
-            <input className={styles.input} type="text" {...field("model_summary")} />
-          </label>
-          <label className={styles.label}>
-            Reply drafting
-            <input className={styles.input} type="text" {...field("model_draft")} />
-          </label>
-          <label className={styles.label}>
-            Action extraction
-            <input className={styles.input} type="text" {...field("model_extract")} />
-          </label>
-          <label className={styles.label}>
-            Embeddings
-            <input className={styles.input} type="text" {...field("model_embed")} />
-          </label>
-        </section>
-
-        {/* Privacy */}
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Privacy</h2>
-
-          <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={form.privacy_mode}
-              onChange={(e) => setForm((f) => ({ ...f, privacy_mode: e.target.checked }))}
-            />
-            Privacy mode — strip sender/recipient names before sending to AI API
-          </label>
-
-          <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={form.enabled}
-              onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))}
-            />
-            Enable AI features
-          </label>
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Sync</h2>
-          <label className={styles.label}>
-            Auto-sync interval (minutes)
-            <input
-              className={styles.input}
-              type="number"
-              min={0}
-              step={1}
-              value={autoSyncIntervalMinutes}
-              onChange={(e) => setAutoSyncIntervalMinutes(Number(e.target.value))}
-            />
-          </label>
-          <p className={styles.muted}>Use 0 to disable background auto-sync.</p>
-
-          <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={autoLabelNewEmails}
-              onChange={(e) => setAutoLabelNewEmails(e.target.checked)}
-            />
-            Automatically apply category labels after sync (new unread threads)
-          </label>
-        </section>
-
-        <section className={styles.section}>
-          <h2 className={styles.sectionTitle}>Custom Categories</h2>
-          <p className={styles.muted}>
-            Optional categories used during labeling. Name must be unique.
-          </p>
-          {customDraft.map((category, index) => (
-            <div key={`${index}-${category.name}`} className={styles.categoryCard}>
+            {form.provider === "openai_compat" && (
               <label className={styles.label}>
-                Category name
+                API Key
                 <input
                   className={styles.input}
-                  type="text"
-                  maxLength={32}
-                  value={category.name}
-                  onChange={(e) =>
-                    updateCategory(index, (current) => ({
-                      ...current,
-                      name: e.target.value,
-                    }))
-                  }
+                  type="password"
+                  placeholder="sk-... (stored in OS keychain)"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
                 />
               </label>
-              <label className={styles.label}>
-                Examples (one per line)
-                <textarea
-                  className={styles.textarea}
-                  rows={4}
-                  value={category.examples.join("\n")}
-                  onChange={(e) =>
-                    updateCategory(index, (current) => ({
-                      ...current,
-                      examples: e.target.value
-                        .split("\n")
-                        .map((line) => line.trim())
-                        .filter(Boolean)
-                        .slice(0, 6),
-                    }))
-                  }
-                />
-              </label>
-              <button
-                className={styles.removeBtn}
-                onClick={() =>
-                  setCustomDraft((current) =>
-                    current.filter((_, idx) => idx !== index),
-                  )
-                }
-              >
-                Remove Category
-              </button>
-            </div>
-          ))}
-          <button
-            className={styles.addBtn}
-            onClick={() =>
-              setCustomDraft((current) =>
-                current.length >= 12
-                  ? current
-                  : [...current, { name: "", examples: [] }],
-              )
-            }
-          >
-            Add Custom Category
-          </button>
-        </section>
+            )}
 
-        <button className={styles.saveBtn} onClick={handleSave}>
-          {saved ? "Saved ✓" : "Save Settings"}
-        </button>
+            <h3 className={styles.subTitle}>Model Assignments</h3>
+
+            <label className={styles.label}>
+              Triage / Fast tasks
+              <input className={styles.input} type="text" {...field("model_triage")} />
+            </label>
+            <label className={styles.label}>
+              Summarization
+              <input className={styles.input} type="text" {...field("model_summary")} />
+            </label>
+            <label className={styles.label}>
+              Reply drafting
+              <input className={styles.input} type="text" {...field("model_draft")} />
+            </label>
+            <label className={styles.label}>
+              Action extraction
+              <input className={styles.input} type="text" {...field("model_extract")} />
+            </label>
+            <label className={styles.label}>
+              Embeddings
+              <input className={styles.input} type="text" {...field("model_embed")} />
+            </label>
+          </section>
+
+          {/* Privacy */}
+          <section id="privacy" className={styles.section}>
+            <h2 className={styles.sectionTitle}>Privacy</h2>
+
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={form.privacy_mode}
+                onChange={(e) => setForm((f) => ({ ...f, privacy_mode: e.target.checked }))}
+              />
+              Privacy mode — strip sender/recipient names before sending to AI API
+            </label>
+
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={form.enabled}
+                onChange={(e) => setForm((f) => ({ ...f, enabled: e.target.checked }))}
+              />
+              Enable AI features
+            </label>
+          </section>
+
+          <section id="sync" className={styles.section}>
+            <h2 className={styles.sectionTitle}>Sync</h2>
+            <label className={styles.label}>
+              Auto-sync interval (minutes)
+              <input
+                className={styles.input}
+                type="number"
+                min={0}
+                step={1}
+                value={autoSyncIntervalMinutes}
+                onChange={(e) => setAutoSyncIntervalMinutes(Number(e.target.value))}
+              />
+            </label>
+            <p className={styles.muted}>Use 0 to disable background auto-sync.</p>
+
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={autoLabelNewEmails}
+                onChange={(e) => setAutoLabelNewEmails(e.target.checked)}
+              />
+              Automatically apply category labels after sync (new unread threads)
+            </label>
+          </section>
+
+          <section id="categories" className={styles.section}>
+            <h2 className={styles.sectionTitle}>Custom Categories</h2>
+            <p className={styles.muted}>
+              Optional categories used during labeling. Name must be unique.
+            </p>
+            {customDraft.map((category, index) => (
+              <div key={`${index}-${category.name}`} className={styles.categoryCard}>
+                <label className={styles.label}>
+                  Category name
+                  <input
+                    className={styles.input}
+                    type="text"
+                    maxLength={32}
+                    value={category.name}
+                    onChange={(e) =>
+                      updateCategory(index, (current) => ({
+                        ...current,
+                        name: e.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label className={styles.label}>
+                  Examples (one per line)
+                  <textarea
+                    className={styles.textarea}
+                    rows={4}
+                    value={category.examples.join("\n")}
+                    onChange={(e) =>
+                      updateCategory(index, (current) => ({
+                        ...current,
+                        examples: e.target.value
+                          .split("\n")
+                          .map((line) => line.trim())
+                          .filter(Boolean)
+                          .slice(0, 6),
+                      }))
+                    }
+                  />
+                </label>
+                <button
+                  className={styles.removeBtn}
+                  onClick={() =>
+                    setCustomDraft((current) =>
+                      current.filter((_, idx) => idx !== index),
+                    )
+                  }
+                >
+                  Remove Category
+                </button>
+              </div>
+            ))}
+            <button
+              className={styles.addBtn}
+              onClick={() =>
+                setCustomDraft((current) =>
+                  current.length >= 12
+                    ? current
+                    : [...current, { name: "", examples: [] }],
+                )
+              }
+            >
+              Add Custom Category
+            </button>
+          </section>
+        </div>
       </div>
     </div>
   );
