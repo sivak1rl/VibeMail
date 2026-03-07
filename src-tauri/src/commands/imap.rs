@@ -1,7 +1,9 @@
 use crate::db::{models::*, Database};
 use crate::mail::{imap as mail_imap, sync::SyncManager};
 use crate::search::SearchIndex;
+use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
@@ -306,9 +308,129 @@ pub async fn set_threads_read(
     request: SetThreadsReadRequest,
     db: State<'_, Arc<Mutex<Database>>>,
 ) -> Result<usize, String> {
+    let thread_ids = request
+        .thread_ids
+        .into_iter()
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    if thread_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let (account, mailbox_targets) = {
+        let db = db.lock().await;
+        let locations = db
+            .get_thread_message_locations(&thread_ids)
+            .map_err(|e| e.to_string())?;
+        if locations.is_empty() {
+            return Ok(0);
+        }
+
+        let account_ids = locations
+            .iter()
+            .map(|location| location.account_id.clone())
+            .collect::<BTreeSet<_>>();
+        if account_ids.len() != 1 {
+            return Err("Selected threads span multiple accounts".to_string());
+        }
+        let account_id = account_ids
+            .iter()
+            .next()
+            .cloned()
+            .ok_or_else(|| "Missing account id".to_string())?;
+
+        let account = db
+            .list_accounts()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|acct| acct.id == account_id)
+            .ok_or_else(|| "Account not found".to_string())?;
+
+        let mut uids_by_mailbox: HashMap<String, BTreeSet<u32>> = HashMap::new();
+        for location in locations {
+            uids_by_mailbox
+                .entry(location.mailbox_id)
+                .or_default()
+                .insert(location.uid);
+        }
+
+        let mut targets = Vec::with_capacity(uids_by_mailbox.len());
+        for (mailbox_id, uids) in uids_by_mailbox {
+            let mailbox = db
+                .get_mailbox_by_id(&account.id, &mailbox_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Mailbox not found: {}", mailbox_id))?;
+            targets.push((mailbox.name, uids.into_iter().collect::<Vec<_>>()));
+        }
+
+        (account, targets)
+    };
+
+    let mut session = mail_imap::connect_imap(&account)
+        .await
+        .map_err(|e| e.to_string())?;
+    let store_cmd = if request.read {
+        "+FLAGS.SILENT (\\Seen)"
+    } else {
+        "-FLAGS.SILENT (\\Seen)"
+    };
+
+    for (mailbox_name, uids) in mailbox_targets {
+        session
+            .select(&mailbox_name)
+            .await
+            .map_err(|e| e.to_string())?;
+        for chunk in uids.chunks(250) {
+            let sequence_set = format_uid_sequence_set(chunk);
+            let mut updates = session
+                .uid_store(&sequence_set, store_cmd)
+                .await
+                .map_err(|e| e.to_string())?;
+            while updates
+                .try_next()
+                .await
+                .map_err(|e| e.to_string())?
+                .is_some()
+            {}
+        }
+    }
+
+    let _ = session.logout().await;
+
     let db = db.lock().await;
-    db.set_threads_read_state(&request.thread_ids, request.read)
+    db.set_threads_read_state(&thread_ids, request.read)
         .map_err(|e| e.to_string())
+}
+
+fn format_uid_sequence_set(uids: &[u32]) -> String {
+    if uids.is_empty() {
+        return String::new();
+    }
+
+    let mut ranges = Vec::new();
+    let mut start = uids[0];
+    let mut prev = uids[0];
+    for &uid in &uids[1..] {
+        if uid == prev + 1 {
+            prev = uid;
+            continue;
+        }
+        if start == prev {
+            ranges.push(start.to_string());
+        } else {
+            ranges.push(format!("{}:{}", start, prev));
+        }
+        start = uid;
+        prev = uid;
+    }
+
+    if start == prev {
+        ranges.push(start.to_string());
+    } else {
+        ranges.push(format!("{}:{}", start, prev));
+    }
+
+    ranges.join(",")
 }
 
 #[tauri::command]

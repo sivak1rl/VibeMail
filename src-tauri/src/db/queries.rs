@@ -10,6 +10,13 @@ pub struct MailboxStats {
     pub unread_count: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct ThreadMessageLocation {
+    pub account_id: String,
+    pub mailbox_id: String,
+    pub uid: u32,
+}
+
 impl Database {
     pub fn upsert_account(&self, account: &Account) -> Result<()> {
         self.conn.execute(
@@ -436,6 +443,44 @@ impl Database {
             self.set_thread_read_state(thread_id, read)?;
         }
         Ok(thread_ids.len())
+    }
+
+    pub fn get_thread_message_locations(
+        &self,
+        thread_ids: &[String],
+    ) -> Result<Vec<ThreadMessageLocation>> {
+        if thread_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let placeholders = thread_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT account_id, mailbox_id, uid
+             FROM messages
+             WHERE thread_id IN ({})
+             ORDER BY account_id, mailbox_id, uid",
+            placeholders
+        );
+
+        let params: Vec<&dyn rusqlite::ToSql> = thread_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .collect();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), |row| {
+            Ok(ThreadMessageLocation {
+                account_id: row.get(0)?,
+                mailbox_id: row.get(1)?,
+                uid: row.get::<_, i64>(2)? as u32,
+            })
+        })?;
+
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn fts_search(

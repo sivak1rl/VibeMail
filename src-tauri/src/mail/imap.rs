@@ -198,7 +198,7 @@ pub async fn sync_mailbox(
             );
 
             let fetches: Vec<_> = session
-                .uid_fetch(&uid_range, "(RFC822 FLAGS UID)")
+                .uid_fetch(&uid_range, "(BODY.PEEK[] FLAGS UID)")
                 .await?
                 .try_collect()
                 .await?;
@@ -234,7 +234,7 @@ pub async fn sync_mailbox(
             );
 
             let fetches: Vec<_> = session
-                .uid_fetch(&uid_range, "(RFC822 FLAGS UID)")
+                .uid_fetch(&uid_range, "(BODY.PEEK[] FLAGS UID)")
                 .await?
                 .try_collect()
                 .await?;
