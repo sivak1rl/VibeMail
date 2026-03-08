@@ -377,6 +377,50 @@
 }
 
 
+.detailToggle {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.detailToggle:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.msgDetailHeader {
+  padding: 8px 14px;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.detailRow {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.detailLabel {
+  color: var(--color-text-muted);
+  font-weight: 600;
+  min-width: 36px;
+  flex-shrink: 0;
+}
+
+.detailValue {
+  color: var(--color-text);
+  word-break: break-word;
+}
+
 .messageBody { padding: 14px; }
 
 .htmlFrame {

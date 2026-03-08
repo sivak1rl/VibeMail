@@ -64,6 +64,7 @@ interface AiState {
     force?: boolean,
   ) => Promise<CategorizeThreadResult[]>;
   draftReply: (threadId: string) => Promise<string>;
+  draftNew: (prompt: string) => Promise<string>;
   extractActions: (threadId: string) => Promise<ExtractedAction[]>;
   triageThread: (threadId: string) => Promise<TriageResult>;
 }
@@ -216,6 +217,44 @@ export const useAiStore = create<AiState>((set, get) => ({
     }
 
     return get().draftByThread[threadId] ?? "";
+  },
+
+  draftNew: async (prompt) => {
+    const KEY = "__new__";
+    set((s) => ({
+      draftByThread: { ...s.draftByThread, [KEY]: "" },
+      draftStreaming: { ...s.draftStreaming, [KEY]: true },
+    }));
+
+    const unlistenToken = await listen<string>("ai_draft_new", (event) => {
+      set((s) => ({
+        draftByThread: {
+          ...s.draftByThread,
+          [KEY]: (s.draftByThread[KEY] ?? "") + event.payload,
+        },
+      }));
+    });
+
+    const unlistenDone = await listen<string>("ai_draft_new_done", () => {
+      set((s) => ({
+        draftStreaming: { ...s.draftStreaming, [KEY]: false },
+      }));
+      unlistenToken();
+      unlistenDone();
+    });
+
+    try {
+      await invoke("draft_new", { request: { prompt } });
+    } catch (e) {
+      set((s) => ({
+        draftStreaming: { ...s.draftStreaming, [KEY]: false },
+      }));
+      unlistenToken();
+      unlistenDone();
+      throw e;
+    }
+
+    return get().draftByThread[KEY] ?? "";
   },
 
   extractActions: async (threadId) => {

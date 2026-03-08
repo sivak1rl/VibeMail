@@ -5,6 +5,7 @@ const DEFAULT_AUTO_SYNC_MINUTES = 15;
 const DEFAULT_AUTO_LABEL_NEW_EMAILS = false;
 const DEFAULT_HISTORY_FETCH_DAYS = 30;
 const DEFAULT_HISTORY_FETCH_LIMIT = 100;
+const DEFAULT_SHOW_MESSAGE_DETAILS_BY_DEFAULT = false;
 
 export interface CustomCategoryPreference {
   name: string;
@@ -17,11 +18,13 @@ interface PreferencesState {
   historyFetchDays: number;
   historyFetchLimit: number;
   customCategories: CustomCategoryPreference[];
+  showMessageDetailsByDefault: boolean;
   setAutoSyncIntervalMinutes: (minutes: number) => void;
   setAutoLabelNewEmails: (enabled: boolean) => void;
   setHistoryFetchDays: (days: number) => void;
   setHistoryFetchLimit: (limit: number) => void;
   setCustomCategories: (categories: CustomCategoryPreference[]) => void;
+  setShowMessageDetailsByDefault: (enabled: boolean) => void;
 }
 
 interface StoredPreferences {
@@ -30,6 +33,7 @@ interface StoredPreferences {
   historyFetchDays?: number;
   historyFetchLimit?: number;
   customCategories?: CustomCategoryPreference[];
+  showMessageDetailsByDefault?: boolean;
 }
 
 function loadPreferences(): StoredPreferences {
@@ -78,6 +82,14 @@ function loadHistoryFetchLimit(): number {
   return Math.max(1, Math.floor(value));
 }
 
+function loadShowMessageDetailsByDefault(): boolean {
+  const parsed = loadPreferences();
+  if (typeof parsed.showMessageDetailsByDefault !== "boolean") {
+    return DEFAULT_SHOW_MESSAGE_DETAILS_BY_DEFAULT;
+  }
+  return parsed.showMessageDetailsByDefault;
+}
+
 function loadCustomCategories(): CustomCategoryPreference[] {
   const parsed = loadPreferences();
   if (!Array.isArray(parsed.customCategories)) return [];
@@ -117,6 +129,7 @@ export const usePreferencesStore = create<PreferencesState>((set) => ({
   historyFetchDays: loadHistoryFetchDays(),
   historyFetchLimit: loadHistoryFetchLimit(),
   customCategories: loadCustomCategories(),
+  showMessageDetailsByDefault: loadShowMessageDetailsByDefault(),
   setAutoSyncIntervalMinutes: (minutes) => {
     const normalized = Number.isFinite(minutes)
       ? Math.max(0, Math.floor(minutes))
@@ -141,6 +154,10 @@ export const usePreferencesStore = create<PreferencesState>((set) => ({
       : DEFAULT_HISTORY_FETCH_LIMIT;
     persistPreferences({ historyFetchLimit: normalized });
     set({ historyFetchLimit: normalized });
+  },
+  setShowMessageDetailsByDefault: (enabled) => {
+    persistPreferences({ showMessageDetailsByDefault: enabled });
+    set({ showMessageDetailsByDefault: enabled });
   },
   setCustomCategories: (categories) => {
     const normalized = categories

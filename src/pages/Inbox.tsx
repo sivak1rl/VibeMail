@@ -9,6 +9,7 @@ import { buildMailboxTree, type MailboxTreeNode } from "../utils/mailbox";
 import InboxList from "../components/InboxList/InboxList";
 import ThreadView from "../components/ThreadView/ThreadView";
 import SearchBar from "../components/SearchBar/SearchBar";
+import Compose from "../components/Compose/Compose";
 import styles from "./Inbox.module.css";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -39,12 +40,15 @@ export default function Inbox({ onSettings }: Props) {
     selectThread,
     syncAccount,
     setThreadsRead,
+    setThreadsFlagged,
+    archiveThreads,
     applyThreadLabels,
     setFocusMode,
     loadMoreThreads,
     fetchHistory,
     fetchEntireMailbox,
     hasMore,
+    clearThread,
   } = useThreadStore();
 
   const { results: searchResults, query: searchQuery, clear: clearSearch } = useSearchStore();
@@ -55,7 +59,12 @@ export default function Inbox({ onSettings }: Props) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
   const [lastSelectedThreadId, setLastSelectedThreadId] = useState<string | null>(null);
+  const [showReplyCompose, setShowReplyCompose] = useState(false);
+  const [showNewCompose, setShowNewCompose] = useState(false);
+  const [newComposeExpanded, setNewComposeExpanded] = useState(false);
+  const [showHelpModal, setShowHelpModal] = useState(false);
   const lastSyncingRef = useRef(false);
+  const searchBarRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     loadConfig();
@@ -307,6 +316,107 @@ export default function Inbox({ onSettings }: Props) {
     await setThreadsRead(selectedThreadIds, shouldMarkRead);
   }, [selectedThreadIds, setThreadsRead, shouldMarkRead]);
 
+  // Close reply compose when thread changes
+  useEffect(() => {
+    setShowReplyCompose(false);
+  }, [selectedThreadId]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isEditable =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable;
+
+      // ? toggles help regardless of focus
+      if (e.key === "?" && !isEditable) {
+        setShowHelpModal((v) => !v);
+        return;
+      }
+
+      // Escape: close things in priority order
+      if (e.key === "Escape") {
+        if (showHelpModal) { setShowHelpModal(false); return; }
+        if (showNewCompose) { setShowNewCompose(false); return; }
+        if (showReplyCompose) { setShowReplyCompose(false); return; }
+        setSelectedThreadIds([]);
+        return;
+      }
+
+      if (isEditable) return;
+
+      switch (e.key) {
+        case "j": {
+          const idx = displayedThreads.findIndex((t) => t.id === selectedThreadId);
+          const next = displayedThreads[idx + 1];
+          if (next) void selectThread(next.id);
+          break;
+        }
+        case "k": {
+          const idx = displayedThreads.findIndex((t) => t.id === selectedThreadId);
+          const prev = displayedThreads[Math.max(0, idx - 1)];
+          if (prev && prev.id !== selectedThreadId) void selectThread(prev.id);
+          break;
+        }
+        case "r": {
+          if (selectedThreadId) setShowReplyCompose(true);
+          break;
+        }
+        case "a": {
+          if (selectedThreadId) void archiveThreads([selectedThreadId]);
+          break;
+        }
+        case "e": {
+          if (selectedThreadId) {
+            const thread = displayedThreads.find((t) => t.id === selectedThreadId);
+            void setThreadsRead([selectedThreadId], (thread?.unread_count ?? 0) > 0);
+          }
+          break;
+        }
+        case "f": {
+          if (selectedThreadId) {
+            const thread = displayedThreads.find((t) => t.id === selectedThreadId);
+            void setThreadsFlagged([selectedThreadId], !thread?.is_flagged);
+          }
+          break;
+        }
+        case "c": {
+          setShowNewCompose(true);
+          break;
+        }
+        case "/": {
+          e.preventDefault();
+          searchBarRef.current?.focus();
+          break;
+        }
+        case "u": {
+          clearThread();
+          break;
+        }
+        case "A": {
+          if (e.shiftKey) setSelectedThreadIds(displayedThreads.map((t) => t.id));
+          break;
+        }
+      }
+    };
+
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [
+    displayedThreads,
+    selectedThreadId,
+    showHelpModal,
+    showNewCompose,
+    showReplyCompose,
+    selectThread,
+    archiveThreads,
+    setThreadsRead,
+    setThreadsFlagged,
+    clearThread,
+  ]);
+
   const mailboxTree = useMemo(() => buildMailboxTree(mailboxes), [mailboxes]);
 
   const renderMailboxTree = useCallback(
@@ -365,6 +475,17 @@ export default function Inbox({ onSettings }: Props) {
           )}
         </div>
 
+        {/* Compose button */}
+        <div className={styles.composeSection}>
+          <button
+            className={styles.composeBtn}
+            onClick={() => setShowNewCompose(true)}
+            title="Compose new email (c)"
+          >
+            {sidebarCollapsed ? "✏" : "+ Compose"}
+          </button>
+        </div>
+
         {/* Account list */}
         {!sidebarCollapsed && accounts.length > 1 && (
           <div className={styles.accounts}>
@@ -417,6 +538,7 @@ export default function Inbox({ onSettings }: Props) {
         <div className={styles.listHeader}>
           <div className={styles.searchRow}>
             <SearchBar
+              ref={searchBarRef}
               mailboxId={selectedMailboxId}
               onResults={() => setShowSearch(true)}
               onClear={() => setShowSearch(false)}
@@ -515,8 +637,59 @@ export default function Inbox({ onSettings }: Props) {
 
       {/* Thread view */}
       <div className={styles.threadPane}>
-        <ThreadView thread={selectedThread} messages={threadMessages} />
+        <ThreadView
+          thread={selectedThread}
+          messages={threadMessages}
+          composeOpen={showReplyCompose}
+          onComposeClose={() => setShowReplyCompose(false)}
+          onReplyClick={() => setShowReplyCompose(true)}
+        />
       </div>
+
+      {/* New compose overlay — single mount so internal state survives expand toggle */}
+      {showNewCompose && (
+        <div
+          className={newComposeExpanded ? styles.newComposeFullscreen : styles.newComposeOverlay}
+          onClick={newComposeExpanded ? () => setNewComposeExpanded(false) : undefined}
+        >
+          <div
+            className={newComposeExpanded ? styles.newComposeCard : ""}
+            onClick={newComposeExpanded ? (e) => e.stopPropagation() : undefined}
+          >
+            <Compose
+              expanded={newComposeExpanded}
+              onClose={() => { setShowNewCompose(false); setNewComposeExpanded(false); }}
+              onExpandChange={setNewComposeExpanded}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Keyboard shortcut help modal */}
+      {showHelpModal && (
+        <div className={styles.helpBackdrop} onClick={() => setShowHelpModal(false)}>
+          <div className={styles.helpModal} onClick={(e) => e.stopPropagation()}>
+            <div className={styles.helpHeader}>
+              <span>Keyboard Shortcuts</span>
+              <button className={styles.helpClose} onClick={() => setShowHelpModal(false)}>✕</button>
+            </div>
+            <div className={styles.helpGrid}>
+              <kbd>j</kbd><span>Next thread</span>
+              <kbd>k</kbd><span>Previous thread</span>
+              <kbd>r</kbd><span>Reply</span>
+              <kbd>a</kbd><span>Archive</span>
+              <kbd>e</kbd><span>Toggle read/unread</span>
+              <kbd>f</kbd><span>Toggle flag/star</span>
+              <kbd>c</kbd><span>Compose new email</span>
+              <kbd>/</kbd><span>Focus search</span>
+              <kbd>u</kbd><span>Back to list</span>
+              <kbd>Shift+A</kbd><span>Select all</span>
+              <kbd>Esc</kbd><span>Close / clear selection</span>
+              <kbd>?</kbd><span>This help</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -92,6 +92,7 @@ pub fn run() {
             commands::smtp::send_message,
             commands::ai::summarize_thread,
             commands::ai::draft_reply,
+            commands::ai::draft_new,
             commands::ai::extract_actions,
             commands::ai::triage_thread,
             commands::ai::categorize_threads,

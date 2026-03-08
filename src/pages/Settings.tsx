@@ -26,6 +26,8 @@ export default function Settings({ onBack, onReset }: Props) {
     setAutoSyncIntervalMinutes,
     autoLabelNewEmails,
     setAutoLabelNewEmails,
+    showMessageDetailsByDefault,
+    setShowMessageDetailsByDefault,
     historyFetchDays,
     setHistoryFetchDays,
     historyFetchLimit,
@@ -261,6 +263,15 @@ export default function Settings({ onBack, onReset }: Props) {
                 onChange={(e) => setAutoLabelNewEmails(e.target.checked)}
               />
               Automatically apply category labels after sync (new unread threads)
+            </label>
+
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={showMessageDetailsByDefault}
+                onChange={(e) => setShowMessageDetailsByDefault(e.target.checked)}
+              />
+              Show message header details (From, To, Cc, Date) by default when opening a message
             </label>
 
             <label className={styles.label} style={{ marginTop: "16px" }}>

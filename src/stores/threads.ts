@@ -83,6 +83,7 @@ interface ThreadStore {
     knownCategoryLabels?: string[],
   ) => void;
   setFocusMode: (v: boolean) => void;
+  clearThread: () => void;
 }
 
 export const useThreadStore = create<ThreadStore>((set, get) => ({
@@ -475,4 +476,5 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
   },
 
   setFocusMode: (v) => set({ focusMode: v }),
+  clearThread: () => set({ selectedThreadId: null, threadMessages: [] }),
 }));

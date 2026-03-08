@@ -132,6 +132,15 @@ export default function InboxList({
     overscan: 8,
   });
 
+  // Scroll selected item into view when selectedId changes
+  useEffect(() => {
+    if (!selectedId) return;
+    const idx = threads.findIndex((t) => t.id === selectedId);
+    if (idx >= 0) {
+      virtualizer.scrollToIndex(idx, { align: "auto" });
+    }
+  }, [selectedId, threads, virtualizer]);
+
   // Trigger loadMore on scroll (catches both mouse wheel and keyboard End/PageDown)
   const handleScroll = useCallback(() => {
     if (!onLoadMore || !hasMore || loading) return;
