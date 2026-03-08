@@ -497,6 +497,7 @@ export default function Inbox({ onSettings }: Props) {
         </div>
 
         <InboxList
+          scrollKey={selectedMailboxId ?? "all"}
           threads={displayedThreads}
           selectedId={selectedThreadId}
           selectedThreadIds={selectedThreadIds}

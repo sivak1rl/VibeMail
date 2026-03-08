@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { formatDistanceToNow } from "date-fns";
 import type { Thread } from "../../stores/threads";
 import styles from "./InboxList.module.css";
@@ -16,6 +17,7 @@ interface Props {
   onFetchAll?: () => Promise<void>;
   hasMore?: boolean;
   query?: string;
+  scrollKey: string;
 }
 
 const PULL_THRESHOLD = 80;
@@ -95,14 +97,42 @@ export default function InboxList({
   onFetchAll,
   hasMore,
   query,
+  scrollKey,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const sentinelRef = useRef<HTMLDivElement>(null);
   const [pullDistance, setPullDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const startY = useRef(0);
-  const selectedSet = new Set(selectedThreadIds);
+  const selectedSet = useMemo(() => new Set(selectedThreadIds), [selectedThreadIds]);
+  const scrollPositions = useRef<Map<string, number>>(new Map());
+  const prevScrollKey = useRef<string>(scrollKey);
 
+  useEffect(() => {
+    if (prevScrollKey.current === scrollKey) return;
+    const el = containerRef.current;
+    if (el) {
+      scrollPositions.current.set(prevScrollKey.current, el.scrollTop);
+    }
+    prevScrollKey.current = scrollKey;
+    requestAnimationFrame(() => {
+      if (containerRef.current) {
+        containerRef.current.scrollTop = scrollPositions.current.get(scrollKey) ?? 0;
+      }
+    });
+  }, [scrollKey]);
+
+  // Virtual items count: threads + optional footer row
+  const showFooter = !loading && !hasMore && !query && (onFetchHistory || onFetchAll);
+  const totalCount = threads.length + (showFooter ? 1 : 0);
+
+  const virtualizer = useVirtualizer({
+    count: totalCount,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => 80,
+    overscan: 8,
+  });
+
+  // Trigger loadMore on scroll (catches both mouse wheel and keyboard End/PageDown)
   const handleScroll = useCallback(() => {
     if (!onLoadMore || !hasMore || loading) return;
     const el = containerRef.current;
@@ -203,104 +233,133 @@ export default function InboxList({
     );
   }
 
+  const virtualItems = virtualizer.getVirtualItems();
+
   return (
     <div className={styles.list} ref={containerRef}>
       {pullDistance > 0 && (
-        <div 
+        <div
           className={styles.pullIndicator}
           style={{ height: `${pullDistance}px`, opacity: pullDistance / PULL_THRESHOLD }}
         >
           {refreshing ? "↻" : pullDistance >= PULL_THRESHOLD ? "↑" : "↓"}
         </div>
       )}
-      {threads.map((thread) => {
-        const isUnread = thread.unread_count > 0;
-        const isSelected = thread.id === selectedId;
-        const isChecked = selectedSet.has(thread.id);
-        const senderDisplay =
-          thread.last_from ?? thread.participants[0]?.email ?? "Unknown";
-        const category = categoryLabel(thread.labels);
+      {/* Virtualizer spacer — sets the total scroll height */}
+      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+        {virtualItems.map((virtualRow) => {
+          // Footer row
+          if (virtualRow.index === threads.length) {
+            return (
+              <div
+                key="footer"
+                data-index={virtualRow.index}
+                ref={virtualizer.measureElement}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                <div className={styles.historyFooter}>
+                  <p className={styles.historyText}>End of local history</p>
+                  <div className={styles.historyActions}>
+                    {onFetchHistory && (
+                      <button
+                        className={styles.historyBtn}
+                        onClick={() => void onFetchHistory()}
+                      >
+                        Load older emails
+                      </button>
+                    )}
+                    {onFetchAll && (
+                      <button
+                        className={`${styles.historyBtn} ${styles.historyBtnAll}`}
+                        onClick={() => void onFetchAll()}
+                      >
+                        Load entire folder
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          }
 
-        return (
-          <div
-            key={thread.id}
-            className={`${styles.item} ${isSelected ? styles.selected : ""} ${
-              isUnread ? styles.unread : ""
-            }`}
-            onClick={() => onSelect(thread.id)}
-          >
-            <div className={styles.itemTop}>
-              <div className={styles.itemLead}>
-                <input
-                  type="checkbox"
-                  checked={isChecked}
-                  className={styles.selectCheckbox}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    event.preventDefault();
-                    onToggleSelect(thread.id, !isChecked, event.shiftKey);
-                  }}
-                />
-                <span className={styles.sender}>
-                  <Highlight text={senderDisplay} query={query} />
-                </span>
+          const thread = threads[virtualRow.index];
+          if (!thread) return null;
+          const isUnread = thread.unread_count > 0;
+          const isSelected = thread.id === selectedId;
+          const isChecked = selectedSet.has(thread.id);
+          const senderDisplay =
+            thread.last_from ?? thread.participants[0]?.email ?? "Unknown";
+          const category = categoryLabel(thread.labels);
+
+          return (
+            <div
+              key={thread.id}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+            >
+              <div
+                className={`${styles.item} ${isSelected ? styles.selected : ""} ${
+                  isUnread ? styles.unread : ""
+                }`}
+                onClick={() => onSelect(thread.id)}
+              >
+                <div className={styles.itemTop}>
+                  <div className={styles.itemLead}>
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      className={styles.selectCheckbox}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        event.preventDefault();
+                        onToggleSelect(thread.id, !isChecked, event.shiftKey);
+                      }}
+                    />
+                    <span className={styles.sender}>
+                      <Highlight text={senderDisplay} query={query} />
+                    </span>
+                  </div>
+                  <span className={styles.date}>{formatDate(thread.last_date)}</span>
+                </div>
+                <div className={styles.itemMid}>
+                  <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+                    {thread.is_flagged && <span className={styles.star}>★</span>}
+                    {thread.has_attachments && <span className={styles.paperclip}>📎</span>}
+                    <span className={styles.subject}>
+                      <Highlight text={thread.subject ?? "(no subject)"} query={query} />
+                    </span>
+                  </div>
+                  {thread.unread_count > 0 && (
+                    <span className={styles.unreadBadge}>{thread.unread_count}</span>
+                  )}
+                </div>
+                <div className={styles.itemBot}>
+                  <TriageDot score={thread.triage_score} />
+                  {category && <span className={styles.category}>{category}</span>}
+                  {thread.message_count > 1 && (
+                    <span className={styles.count}>{thread.message_count}</span>
+                  )}
+                </div>
               </div>
-              <span className={styles.date}>{formatDate(thread.last_date)}</span>
             </div>
-            <div className={styles.itemMid}>
-              <div style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
-                {thread.is_flagged && <span className={styles.star}>★</span>}
-                {thread.has_attachments && <span className={styles.paperclip}>📎</span>}
-                <span className={styles.subject}>
-                  <Highlight text={thread.subject ?? "(no subject)"} query={query} />
-                </span>
-              </div>
-              {thread.unread_count > 0 && (
-                <span className={styles.unreadBadge}>{thread.unread_count}</span>
-              )}
-            </div>
-            <div className={styles.itemBot}>
-              <TriageDot score={thread.triage_score} />
-              {category && <span className={styles.category}>{category}</span>}
-              {thread.message_count > 1 && (
-                <span className={styles.count}>{thread.message_count}</span>
-              )}
-            </div>
-          </div>
-        );
-      })}
-      <div ref={sentinelRef} />
+          );
+        })}
+      </div>
       {loading && threads.length > 0 && (
         <div className={styles.loadingMore}>Loading more…</div>
-      )}
-      {!loading && !hasMore && !query && (onFetchHistory || onFetchAll) && (
-        <div className={styles.historyFooter}>
-          <p className={styles.historyText}>End of local history</p>
-          <div className={styles.historyActions}>
-            {onFetchHistory && (
-              <button 
-                className={styles.historyBtn}
-                onClick={() => {
-                  console.log("InboxList: Requesting history fetch");
-                  void onFetchHistory();
-                }}
-              >
-                Load older emails
-              </button>
-            )}
-            {onFetchAll && (
-              <button 
-                className={`${styles.historyBtn} ${styles.historyBtnAll}`}
-                onClick={() => {
-                  console.log("InboxList: Requesting full fetch");
-                  void onFetchAll();
-                }}
-              >
-                Load entire folder
-              </button>
-            )}
-          </div>
-        </div>
       )}
     </div>
   );
