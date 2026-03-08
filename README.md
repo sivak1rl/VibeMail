@@ -1,5 +1,9 @@
 # VibeMail — AI-Native Email Client
 
+<p align="center">
+  <img src="./logo_transparent.png" alt="VibeMail logo" width="320" />
+</p>
+
 An intelligent desktop email client built with Tauri 2 (Rust + React) featuring local IMAP/SMTP sync, provider-agnostic AI integration (Ollama + OpenAI-compatible), full-text + semantic search, and automatic email threading.
 
 ## Features

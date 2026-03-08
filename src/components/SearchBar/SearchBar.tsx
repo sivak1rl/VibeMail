@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useRef, useState } from "react";
 import { useSearchStore } from "../../stores/search";
 import { useAccountStore } from "../../stores/accounts";
 import styles from "./SearchBar.module.css";
@@ -9,7 +9,7 @@ interface Props {
   onClear: () => void;
 }
 
-export default function SearchBar({ mailboxId = null, onResults, onClear }: Props) {
+const SearchBar = forwardRef<HTMLInputElement, Props>(function SearchBar({ mailboxId = null, onResults, onClear }, ref) {
   const { activeAccountId } = useAccountStore();
   const {
     query,
@@ -105,6 +105,7 @@ export default function SearchBar({ mailboxId = null, onResults, onClear }: Prop
       <div className={styles.wrapper}>
         <span className={styles.icon}>⌕</span>
         <input
+          ref={ref}
           className={styles.input}
           type="search"
           placeholder={useSemantic ? "Semantic search..." : "Search email (try from: or is:unread)"}
@@ -183,4 +184,6 @@ export default function SearchBar({ mailboxId = null, onResults, onClear }: Prop
       )}
     </div>
   );
-}
+});
+
+export default SearchBar;

@@ -5,6 +5,7 @@ const DEFAULT_AUTO_SYNC_MINUTES = 15;
 const DEFAULT_AUTO_LABEL_NEW_EMAILS = false;
 const DEFAULT_HISTORY_FETCH_DAYS = 30;
 const DEFAULT_HISTORY_FETCH_LIMIT = 100;
+const DEFAULT_SHOW_MESSAGE_DETAILS_BY_DEFAULT = false;
 
 export interface CustomCategoryPreference {
   name: string;
@@ -17,11 +18,15 @@ interface PreferencesState {
   historyFetchDays: number;
   historyFetchLimit: number;
   customCategories: CustomCategoryPreference[];
+  showMessageDetailsByDefault: boolean;
+  signatures: Record<string, string>;
   setAutoSyncIntervalMinutes: (minutes: number) => void;
   setAutoLabelNewEmails: (enabled: boolean) => void;
   setHistoryFetchDays: (days: number) => void;
   setHistoryFetchLimit: (limit: number) => void;
   setCustomCategories: (categories: CustomCategoryPreference[]) => void;
+  setShowMessageDetailsByDefault: (enabled: boolean) => void;
+  setSignature: (accountId: string, text: string) => void;
 }
 
 interface StoredPreferences {
@@ -30,6 +35,8 @@ interface StoredPreferences {
   historyFetchDays?: number;
   historyFetchLimit?: number;
   customCategories?: CustomCategoryPreference[];
+  showMessageDetailsByDefault?: boolean;
+  signatures?: Record<string, string>;
 }
 
 function loadPreferences(): StoredPreferences {
@@ -78,6 +85,26 @@ function loadHistoryFetchLimit(): number {
   return Math.max(1, Math.floor(value));
 }
 
+function loadShowMessageDetailsByDefault(): boolean {
+  const parsed = loadPreferences();
+  if (typeof parsed.showMessageDetailsByDefault !== "boolean") {
+    return DEFAULT_SHOW_MESSAGE_DETAILS_BY_DEFAULT;
+  }
+  return parsed.showMessageDetailsByDefault;
+}
+
+function loadSignatures(): Record<string, string> {
+  const parsed = loadPreferences();
+  if (!parsed.signatures || typeof parsed.signatures !== "object") return {};
+  const result: Record<string, string> = {};
+  for (const [k, v] of Object.entries(parsed.signatures)) {
+    if (typeof k === "string" && typeof v === "string") {
+      result[k] = v.slice(0, 2000);
+    }
+  }
+  return result;
+}
+
 function loadCustomCategories(): CustomCategoryPreference[] {
   const parsed = loadPreferences();
   if (!Array.isArray(parsed.customCategories)) return [];
@@ -117,6 +144,8 @@ export const usePreferencesStore = create<PreferencesState>((set) => ({
   historyFetchDays: loadHistoryFetchDays(),
   historyFetchLimit: loadHistoryFetchLimit(),
   customCategories: loadCustomCategories(),
+  showMessageDetailsByDefault: loadShowMessageDetailsByDefault(),
+  signatures: loadSignatures(),
   setAutoSyncIntervalMinutes: (minutes) => {
     const normalized = Number.isFinite(minutes)
       ? Math.max(0, Math.floor(minutes))
@@ -141,6 +170,17 @@ export const usePreferencesStore = create<PreferencesState>((set) => ({
       : DEFAULT_HISTORY_FETCH_LIMIT;
     persistPreferences({ historyFetchLimit: normalized });
     set({ historyFetchLimit: normalized });
+  },
+  setShowMessageDetailsByDefault: (enabled) => {
+    persistPreferences({ showMessageDetailsByDefault: enabled });
+    set({ showMessageDetailsByDefault: enabled });
+  },
+  setSignature: (accountId, text) => {
+    set((state) => {
+      const next = { ...state.signatures, [accountId]: text.slice(0, 2000) };
+      persistPreferences({ signatures: next });
+      return { signatures: next };
+    });
   },
   setCustomCategories: (categories) => {
     const normalized = categories

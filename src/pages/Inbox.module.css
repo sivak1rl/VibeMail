@@ -40,7 +40,12 @@
 }
 .toggleBtn:hover { color: var(--color-text); }
 
-.logo { font-size: 16px; font-weight: 700; color: var(--color-accent); }
+.logo {
+  height: 5vh;
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
 
 .settingsBtn {
   background: none;
@@ -50,6 +55,138 @@
   cursor: pointer;
 }
 .settingsBtn:hover { color: var(--color-text); }
+
+.composeSection {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.composeBtn {
+  width: 100%;
+  background: var(--color-accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+.composeBtn:hover { background: var(--color-accent-hover, #3a7bd5); }
+
+/* Compact bottom-right widget */
+.newComposeOverlay {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  border-radius: 10px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  z-index: 200;
+}
+
+/* Fullscreen backdrop — clicking it collapses back */
+.newComposeFullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2vh 2vw;
+}
+
+/* Sized card that the compose fills */
+.newComposeCard {
+  width: 100%;
+  max-width: 1000px;
+  height: 86vh;
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.8);
+  border: 1px solid var(--color-border);
+  overflow: hidden;
+  animation: composePopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Compose fills the card — applied via Compose.module.css below */
+.newComposeCard > * {
+  height: 100%;
+}
+
+@keyframes composePopIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.helpBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+}
+
+.helpModal {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  width: 360px;
+  max-width: calc(100vw - 48px);
+  overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5);
+}
+
+.helpHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.helpClose {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.helpClose:hover { color: var(--color-text); }
+
+.helpGrid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px 16px;
+  padding: 16px 18px;
+  align-items: center;
+}
+
+.helpGrid kbd {
+  background: var(--color-surface2);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-family: monospace;
+  white-space: nowrap;
+  justify-self: start;
+}
+
+.helpGrid span {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
 
 .accounts {
   padding: 8px;
@@ -299,7 +436,7 @@
     transform: translateX(0);
     transition: transform 0.3s;
   }
-  
+
   .layout:has(.threadPane:not(:empty)) .listPane {
     transform: translateX(-100%);
   }

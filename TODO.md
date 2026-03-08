@@ -39,12 +39,13 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 
 ### Compose
 - [ ] Rich text editor (bold, italic, links, lists)
-- [ ] Reply/Reply All/Forward with quoted original message
+- [x] Reply/Reply All/Forward with quoted original message
 - [ ] Attachment upload via drag-and-drop
 - [ ] Draft auto-save to local DB
-- [ ] CC/BCC fields
-- [ ] Contact autocomplete from message history
-- [ ] Signature configuration per account
+- [x] CC/BCC fields
+- [x] Contact autocomplete from message history
+- [x] Signature configuration per account
+- [x] AI compose panel for new/reply/forward modes (draft/generate + proofread with per-change accept/reject)
 
 ### Search
 - [x] Search-as-you-type with debounce
@@ -69,7 +70,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] AI-generated reply suggestions (3 options: brief, detailed, decline)
 - [ ] Tone selector: professional, casual, friendly
 - [ ] Context-aware: uses full thread history, not just last message
-- [ ] "Edit and send" flow — AI drafts, user refines, then sends
+- [x] "Edit and send" flow — AI drafts, user refines, then sends
 
 ### Triage & Priority
 - [ ] Auto-triage on sync — score every new thread

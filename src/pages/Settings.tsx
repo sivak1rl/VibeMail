@@ -26,12 +26,16 @@ export default function Settings({ onBack, onReset }: Props) {
     setAutoSyncIntervalMinutes,
     autoLabelNewEmails,
     setAutoLabelNewEmails,
+    showMessageDetailsByDefault,
+    setShowMessageDetailsByDefault,
     historyFetchDays,
     setHistoryFetchDays,
     historyFetchLimit,
     setHistoryFetchLimit,
     customCategories,
     setCustomCategories,
+    signatures,
+    setSignature,
   } = usePreferencesStore();
 
   const [dbCounts, setDbCounts] = useState<Record<string, number>>({});
@@ -126,6 +130,7 @@ export default function Settings({ onBack, onReset }: Props) {
       <div className={styles.container}>
         <aside className={styles.sidebar}>
           <button className={styles.navLink} onClick={() => scrollTo("accounts")}>Accounts</button>
+          <button className={styles.navLink} onClick={() => scrollTo("signatures")}>Signatures</button>
           <button className={styles.navLink} onClick={() => scrollTo("ai")}>AI Provider</button>
           <button className={styles.navLink} onClick={() => scrollTo("privacy")}>Privacy</button>
           <button className={styles.navLink} onClick={() => scrollTo("sync")}>Sync</button>
@@ -157,6 +162,25 @@ export default function Settings({ onBack, onReset }: Props) {
                 >
                   Remove
                 </button>
+              </div>
+            ))}
+          </section>
+
+          {/* Signatures */}
+          <section id="signatures" className={styles.section}>
+            <h2 className={styles.sectionTitle}>Signatures</h2>
+            <p className={styles.muted}>Appended automatically when composing new messages.</p>
+            {accounts.length === 0 && <p className={styles.muted}>No accounts configured.</p>}
+            {accounts.map((acc) => (
+              <div key={acc.id} style={{ marginBottom: "16px" }}>
+                <div className={styles.accountEmail} style={{ marginBottom: "6px" }}>{acc.email}</div>
+                <textarea
+                  className={styles.textarea}
+                  rows={4}
+                  placeholder="Your signature (optional)"
+                  value={signatures[acc.id] ?? ""}
+                  onChange={(e) => setSignature(acc.id, e.target.value)}
+                />
               </div>
             ))}
           </section>
@@ -261,6 +285,15 @@ export default function Settings({ onBack, onReset }: Props) {
                 onChange={(e) => setAutoLabelNewEmails(e.target.checked)}
               />
               Automatically apply category labels after sync (new unread threads)
+            </label>
+
+            <label className={styles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={showMessageDetailsByDefault}
+                onChange={(e) => setShowMessageDetailsByDefault(e.target.checked)}
+              />
+              Show message header details (From, To, Cc, Date) by default when opening a message
             </label>
 
             <label className={styles.label} style={{ marginTop: "16px" }}>

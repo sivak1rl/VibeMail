@@ -165,6 +165,65 @@ pub async fn draft_reply(
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DraftNewRequest {
+    pub prompt: String,
+}
+
+#[tauri::command]
+pub async fn draft_new(
+    request: DraftNewRequest,
+    app: AppHandle,
+    router: State<'_, Arc<AiRouter>>,
+) -> Result<String, String> {
+    let chat_messages = vec![
+        ChatMessage {
+            role: "system".into(),
+            content: "You are an email writing assistant. Write a clear, professional email body based on the user's description. Output only the email body — no subject line, no greeting label, no metadata. Start directly with the content.".into(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: request.prompt,
+        },
+    ];
+
+    let stream = router
+        .stream_complete(TaskKind::Draft, chat_messages)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    stream_to_frontend(&app, stream, "ai_draft_new")
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProofreadRequest {
+    pub text: String,
+}
+
+#[tauri::command]
+pub async fn proofread_text(
+    request: ProofreadRequest,
+    router: State<'_, Arc<AiRouter>>,
+) -> Result<String, String> {
+    let text: String = request.text.chars().take(8000).collect();
+    let chat_messages = vec![
+        ChatMessage {
+            role: "system".into(),
+            content: "You are a proofreader. Fix grammar, spelling, punctuation, and clarity in the provided text. Preserve the original meaning and tone. Return only the corrected text with no commentary or explanation.".into(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: text,
+        },
+    ];
+    router
+        .complete(TaskKind::Draft, chat_messages)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn extract_actions(
     request: AiThreadRequest,

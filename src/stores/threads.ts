@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { create } from "zustand";
+import { useMailboxStore } from "./mailboxes";
 
 export interface EmailAddress {
   name: string | null;
@@ -82,6 +83,7 @@ interface ThreadStore {
     knownCategoryLabels?: string[],
   ) => void;
   setFocusMode: (v: boolean) => void;
+  clearThread: () => void;
 }
 
 export const useThreadStore = create<ThreadStore>((set, get) => ({
@@ -192,14 +194,13 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
           if (unlisten) unlisten();
           set({ syncing: false, syncProgress: null });
           
-          // Refresh the view
-          const currentCount = get().threads.length;
-          const PAGE = Math.max(50, currentCount);
+          // Refresh the view — cap at 50 so we don't re-fetch the whole list
+          const PAGE = 50;
           const focusOnly = get().focusMode;
           const threads = await invoke<Thread[]>("list_threads", {
             request: {
               account_id: accountId,
-              mailbox_id: mailboxId,
+              mailbox_id: useMailboxStore.getState().selectedMailboxId,
               limit: PAGE,
               offset: 0,
               focus_only: focusOnly,
@@ -314,8 +315,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
           if (unlisten) unlisten();
           set({ syncing: false, syncProgress: null });
           
-          const currentCount = get().threads.length;
-          const PAGE = Math.max(100, currentCount + 100);
+          const PAGE = 50;
           const focusOnly = get().focusMode;
           const threads = await invoke<Thread[]>("list_threads", {
             request: {
@@ -476,4 +476,5 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
   },
 
   setFocusMode: (v) => set({ focusMode: v }),
+  clearThread: () => set({ selectedThreadId: null, threadMessages: [] }),
 }));

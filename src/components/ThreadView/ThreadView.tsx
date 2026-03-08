@@ -1,17 +1,22 @@
 import { useEffect, useState, useMemo } from "react";
 import DOMPurify from "dompurify";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, format } from "date-fns";
 import { invoke } from "@tauri-apps/api/core";
 import type { Message, Thread } from "../../stores/threads";
 import { useThreadStore } from "../../stores/threads";
 import { useAiStore } from "../../stores/ai";
 import AIPanel from "../AIPanel/AIPanel";
-import Compose from "../Compose/Compose";
+import Compose, { type ComposeMode } from "../Compose/Compose";
+import { usePreferencesStore } from "../../stores/preferences";
 import styles from "./ThreadView.module.css";
 
 interface Props {
   thread: Thread | null;
   messages: Message[];
+  composeOpen: boolean;
+  composeMode?: ComposeMode;
+  onComposeClose: () => void;
+  onReplyClick: (mode: ComposeMode) => void;
 }
 
 interface AttachmentMetadata {
@@ -161,13 +166,22 @@ function MessagePreviews({ attachments }: { attachments: AttachmentMetadata[] })
   );
 }
 
+function formatAddrs(addrs: { name?: string | null; email: string }[]): string {
+  return addrs.map(a => a.name ? `${a.name} <${a.email}>` : a.email).join(", ");
+}
+
 function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean }) {
   const [open, setOpen] = useState(defaultOpen);
+  const { showMessageDetailsByDefault } = usePreferencesStore();
+  const [showDetails, setShowDetails] = useState(showMessageDetailsByDefault);
   const [attachments, setAttachments] = useState<AttachmentMetadata[]>([]);
   const from = msg.from[0];
   const displayName = from?.name ?? from?.email ?? "Unknown";
   const dateStr = msg.date
     ? formatDistanceToNow(new Date(msg.date), { addSuffix: true })
+    : "";
+  const fullDateStr = msg.date
+    ? format(new Date(msg.date), "PPPp")
     : "";
 
   useEffect(() => {
@@ -202,10 +216,43 @@ function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean 
           <span className={styles.msgDate}>{dateStr}</span>
         </div>
         <div className={styles.msgHeaderRight}>
+          {open && (
+            <button
+              className={styles.detailToggle}
+              onClick={(e) => { e.stopPropagation(); setShowDetails((v) => !v); }}
+              title={showDetails ? "Hide details" : "Show details"}
+            >
+              {showDetails ? "Details ▴" : "Details ▾"}
+            </button>
+          )}
           {msg.has_attachments && <span className={styles.headerAttIcon}>📎</span>}
           <span className={styles.chevron}>{open ? "▾" : "▸"}</span>
         </div>
       </div>
+      {open && showDetails && (
+        <div className={styles.msgDetailHeader}>
+          <div className={styles.detailRow}>
+            <span className={styles.detailLabel}>From</span>
+            <span className={styles.detailValue}>{formatAddrs(msg.from)}</span>
+          </div>
+          <div className={styles.detailRow}>
+            <span className={styles.detailLabel}>To</span>
+            <span className={styles.detailValue}>{formatAddrs(msg.to)}</span>
+          </div>
+          {msg.cc.length > 0 && (
+            <div className={styles.detailRow}>
+              <span className={styles.detailLabel}>Cc</span>
+              <span className={styles.detailValue}>{formatAddrs(msg.cc)}</span>
+            </div>
+          )}
+          {fullDateStr && (
+            <div className={styles.detailRow}>
+              <span className={styles.detailLabel}>Date</span>
+              <span className={styles.detailValue}>{fullDateStr}</span>
+            </div>
+          )}
+        </div>
+      )}
       {open && (
         <div className={styles.messageBody}>
           <MessagePreviews attachments={attachments} />
@@ -281,8 +328,7 @@ function AttachmentPanel({ threadId }: { threadId: string }) {
   );
 }
 
-export default function ThreadView({ thread, messages }: Props) {
-  const [showCompose, setShowCompose] = useState(false);
+export default function ThreadView({ thread, messages, composeOpen, composeMode, onComposeClose, onReplyClick }: Props) {
   const [isExpanded, setIsExpanded] = useState(false);
   const { setThreadsRead, setThreadsFlagged, archiveThreads } = useThreadStore();
   const { actionsByThread, loadThreadInsights } = useAiStore();
@@ -354,9 +400,21 @@ export default function ThreadView({ thread, messages }: Props) {
               </button>
               <button
                 className={styles.replyBtn}
-                onClick={() => setShowCompose(true)}
+                onClick={() => onReplyClick("reply")}
               >
                 Reply
+              </button>
+              <button
+                className={styles.replyBtn}
+                onClick={() => onReplyClick("replyAll")}
+              >
+                Reply All
+              </button>
+              <button
+                className={styles.replyBtn}
+                onClick={() => onReplyClick("forward")}
+              >
+                Forward
               </button>
             </div>
           </div>
@@ -389,11 +447,12 @@ export default function ThreadView({ thread, messages }: Props) {
             ))}
           </div>
 
-          {showCompose && (
+          {composeOpen && (
             <Compose
               thread={thread}
               messages={messages}
-              onClose={() => setShowCompose(false)}
+              mode={composeMode ?? "reply"}
+              onClose={onComposeClose}
             />
           )}
         </div>
