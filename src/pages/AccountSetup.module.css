@@ -20,7 +20,12 @@
 }
 
 .logoRow { text-align: center; }
-.logo { font-size: 20px; font-weight: 700; color: var(--color-accent); }
+.logo {
+  height: 52px;
+  width: auto;
+  object-fit: contain;
+  max-width: 100%;
+}
 
 .title {
   font-size: 18px;

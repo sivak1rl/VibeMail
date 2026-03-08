@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
 import { useAccountStore } from "../stores/accounts";
 import styles from "./AccountSetup.module.css";
+import logoTransparent from "../../logo_transparent.png";
 
 interface Props {
   onDone: () => void;
@@ -96,7 +97,7 @@ export default function AccountSetup({ onDone }: Props) {
     <div className={styles.page}>
       <div className={styles.card}>
         <div className={styles.logoRow}>
-          <span className={styles.logo}>VibeMail</span>
+          <img className={styles.logo} src={logoTransparent} alt="VibeMail" />
         </div>
         <h1 className={styles.title}>Add your first account</h1>
 

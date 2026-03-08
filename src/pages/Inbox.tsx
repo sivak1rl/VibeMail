@@ -12,6 +12,7 @@ import SearchBar from "../components/SearchBar/SearchBar";
 import Compose, { type ComposeMode } from "../components/Compose/Compose";
 import styles from "./Inbox.module.css";
 import { invoke } from "@tauri-apps/api/core";
+import logoTransparent from "../../logo_transparent.png";
 
 interface Props {
   onSettings: () => void;
@@ -467,7 +468,9 @@ export default function Inbox({ onSettings }: Props) {
           >
             ☰
           </button>
-          {!sidebarCollapsed && <span className={styles.logo}>VibeMail</span>}
+          {!sidebarCollapsed && (
+            <img className={styles.logo} src={logoTransparent} alt="VibeMail" />
+          )}
           {!sidebarCollapsed && (
             <button className={styles.settingsBtn} onClick={onSettings} title="Settings">
               ⚙
