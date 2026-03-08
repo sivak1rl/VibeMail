@@ -81,8 +81,9 @@ async fn build_transport(account: &Account) -> Result<AsyncSmtpTransport<Tokio1E
         }
         _ => {
             // Plain-password accounts use LOGIN/PLAIN.
-            let password = keychain::get_token(&account.id, "password")?
-                .ok_or_else(|| anyhow!("No password stored for SMTP (account: {})", account.email))?;
+            let password = keychain::get_token(&account.id, "password")?.ok_or_else(|| {
+                anyhow!("No password stored for SMTP (account: {})", account.email)
+            })?;
             let creds = Credentials::new(account.email.clone(), password);
             let transport =
                 AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&account.smtp_host)?
