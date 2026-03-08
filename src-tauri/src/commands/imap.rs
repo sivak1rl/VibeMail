@@ -58,7 +58,7 @@ pub async fn fetch_history(
     }
 
     let db_clone = db.inner().clone();
-    let search_clone = search.inner().clone();
+    let _search_clone = search.inner().clone();
     let sync_mgr_clone = sync_mgr.inner().clone();
     let app_clone = app.clone();
     let account_id_task = account_id.clone();
@@ -461,7 +461,7 @@ async fn do_sync(
             Ok(msgs) => msgs,
             Err(e) => {
                 println!(">>> SYNC ERROR: {}", e);
-                return Err(e.into());
+                return Err(e);
             }
         }
     } else {
@@ -470,7 +470,7 @@ async fn do_sync(
                 Ok(msgs) => msgs,
                 Err(e) => {
                     println!(">>> SYNC ERROR: {}", e);
-                    return Err(e.into());
+                    return Err(e);
                 }
             },
             Err(_) => {
@@ -865,7 +865,14 @@ pub async fn archive_threads(
             {}
         }
         // Actually remove the messages marked \Deleted
-        session.expunge().await.map_err(|e| e.to_string())?;
+        let expunged = session.expunge().await.map_err(|e| e.to_string())?;
+        futures::pin_mut!(expunged);
+        while expunged
+            .try_next()
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {}
     }
 
     let _ = session.logout().await;
@@ -1065,7 +1072,7 @@ pub async fn delete_all_attachments(db: State<'_, Arc<Mutex<Database>>>) -> Resu
 #[tauri::command]
 pub async fn wipe_local_data(
     reset_schema: Option<bool>,
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     db: State<'_, Arc<Mutex<Database>>>,
     search: State<'_, Arc<Mutex<SearchIndex>>>,
 ) -> Result<(), String> {
@@ -1118,7 +1125,7 @@ pub async fn fetch_entire_mailbox(
     }
 
     let db_clone = db.inner().clone();
-    let search_clone = search.inner().clone();
+    let _search_clone = search.inner().clone();
     let sync_mgr_clone = sync_mgr.inner().clone();
     let app_clone = app.clone();
     let account_id_task = account_id.clone();

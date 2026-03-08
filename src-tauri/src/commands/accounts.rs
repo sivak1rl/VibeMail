@@ -23,13 +23,6 @@ pub struct AddAccountRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct StartOAuthRequest {
-    pub provider: String,
-    pub client_id: String,
-    pub client_secret: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct OAuthUrlResponse {
     pub url: String,
     pub account_id: String,

@@ -5,6 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use uuid::Uuid;
 
 struct ThreadNode {
+    #[allow(dead_code)]
     message_id: Option<String>,
     message: Option<Message>,
     parent: Option<String>,

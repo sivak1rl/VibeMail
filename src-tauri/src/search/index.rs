@@ -62,6 +62,7 @@ impl SearchIndex {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<String>> {
         let reader = self
             .index

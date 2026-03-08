@@ -223,13 +223,4 @@ impl AiProvider for OllamaProvider {
 
         Ok(Box::pin(token_stream))
     }
-
-    fn supports_tools(&self) -> bool {
-        // Ollama supports tool-calling for compatible models (llama3.1+)
-        true
-    }
-
-    fn name(&self) -> &str {
-        "ollama"
-    }
 }
