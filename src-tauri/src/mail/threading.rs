@@ -5,6 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use uuid::Uuid;
 
 struct ThreadNode {
+    #[allow(dead_code)]
     message_id: Option<String>,
     message: Option<Message>,
     parent: Option<String>,
@@ -15,7 +16,10 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
     if messages.is_empty() {
         return vec![];
     }
-    println!(">>> THREADING: Starting build for {} messages", messages.len());
+    println!(
+        ">>> THREADING: Starting build for {} messages",
+        messages.len()
+    );
     // Step 1: Build id_table mapping message-id -> node
     let mut id_table: HashMap<String, ThreadNode> = HashMap::new();
     let mut root_ids: Vec<String> = Vec::new();
@@ -167,7 +171,10 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
 
     // Sort by most recent
     threads.sort_by(|a, b| b.last_date.cmp(&a.last_date));
-    println!(">>> THREADING: Successfully built {} threads", threads.len());
+    println!(
+        ">>> THREADING: Successfully built {} threads",
+        threads.len()
+    );
     threads
 }
 

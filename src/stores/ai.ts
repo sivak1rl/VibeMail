@@ -83,7 +83,7 @@ export const useAiStore = create<AiState>((set, get) => ({
     try {
       const config = await invoke<AiConfig>("get_ai_config");
       set({ config, configLoaded: true });
-    } catch (e) {
+    } catch {
       set({ configLoaded: true });
     }
   },

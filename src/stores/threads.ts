@@ -118,7 +118,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
       if (threads[0]?.id) {
         await get().selectThread(threads[0].id);
       }
-    } catch (e) {
+    } catch {
       set({ loading: false });
     }
   },
@@ -143,7 +143,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
         loading: false,
         hasMore: more.length >= PAGE,
       });
-    } catch (e) {
+    } catch {
       set({ loading: false });
     }
   },
@@ -189,6 +189,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
         const isSyncing = await invoke<boolean>("get_sync_status", { accountId });
         if (!isSyncing) {
           if (pollTimer) clearInterval(pollTimer);
+          if (unlisten) unlisten();
           set({ syncing: false, syncProgress: null });
           
           // Refresh the view
@@ -216,9 +217,11 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
       return { account_id: accountId, mailbox_id: mailboxId, new_messages: 0, error: null };
     } catch (e) {
       const error = String(e);
+      if (unlisten) unlisten();
       set({ syncing: false, syncError: error, syncProgress: null });
       throw e;
-    } finally {
+    }
+ finally {
       // We don't unlisten immediately because sync is in background.
       // But we can't keep unlisten forever easily in this pattern.
       // For now, let's keep it until it's done.
@@ -252,6 +255,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
         const isSyncing = await invoke<boolean>("get_sync_status", { accountId });
         if (!isSyncing) {
           if (pollTimer) clearInterval(pollTimer);
+          if (unlisten) unlisten();
           set({ syncing: false, syncProgress: null });
           
           // Refresh the view and expand by the requested limit to show the new history
@@ -276,6 +280,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
         void checkStatus();
       }, 500);
     } catch (e) {
+      if (unlisten) unlisten();
       set({ syncing: false, syncError: String(e), syncProgress: null });
       throw e;
     }
@@ -306,6 +311,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
         const isSyncing = await invoke<boolean>("get_sync_status", { accountId });
         if (!isSyncing) {
           if (pollTimer) clearInterval(pollTimer);
+          if (unlisten) unlisten();
           set({ syncing: false, syncProgress: null });
           
           const currentCount = get().threads.length;
@@ -328,6 +334,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
         void checkStatus();
       }, 500);
     } catch (e) {
+      if (unlisten) unlisten();
       set({ syncing: false, syncError: String(e), syncProgress: null });
       throw e;
     }

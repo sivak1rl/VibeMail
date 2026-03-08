@@ -16,7 +16,6 @@ export default function AccountSetup({ onDone }: Props) {
   const [provider, setProvider] = useState<"gmail" | "outlook" | "generic">("gmail");
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
-  const [_pendingAccountId, setPendingAccountId] = useState<string | null>(null);
   const [genericForm, setGenericForm] = useState({
     name: "",
     email: "",
@@ -37,13 +36,12 @@ export default function AccountSetup({ onDone }: Props) {
     try {
       const res = await invoke<{ url: string; account_id: string }>("get_oauth_url", {
         provider: p,
-        clientId,
-        clientSecret: clientSecret || null,
-      });
+        client_id: clientId,
+        client_secret: clientSecret || null,
+        });
 
-      setPendingAccountId(res.account_id);
+        // Start listener BEFORE opening browser so port 7887 is ready
 
-      // Start listener BEFORE opening browser so port 7887 is ready
       const redirectPromise = invoke("await_oauth_redirect", {
         accountId: res.account_id,
       });

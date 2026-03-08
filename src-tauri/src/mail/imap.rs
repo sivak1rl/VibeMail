@@ -2,10 +2,10 @@ use crate::auth::{keychain, oauth};
 use crate::db::{models::*, Database};
 use crate::mail::{parser, threading};
 use anyhow::{anyhow, Result};
-use chrono::{Duration as ChronoDuration, Utc};
 use async_imap::imap_proto::types::{AttributeValue, Response, Status};
 use async_imap::{types::Flag, Client};
 use async_native_tls::TlsConnector;
+use chrono::{Duration as ChronoDuration, Utc};
 use futures::TryStreamExt;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -223,10 +223,14 @@ pub async fn sync_mailbox(
         // Incremental sync: fetch messages received SINCE the last sync time
         // This handles UID changes and avoids gaps if the server moves UIDs
         let sync_start_time = Utc::now();
-        let last_sync = mailbox.last_synced_at.unwrap_or_else(|| Utc::now() - ChronoDuration::days(1));
-        
+        let last_sync = mailbox
+            .last_synced_at
+            .unwrap_or_else(|| Utc::now() - ChronoDuration::days(1));
+
         // IMAP SINCE only has day resolution, so we subtract one extra day to be safe
-        let since_date = (last_sync - ChronoDuration::days(1)).format("%d-%b-%Y").to_string();
+        let since_date = (last_sync - ChronoDuration::days(1))
+            .format("%d-%b-%Y")
+            .to_string();
         let search_query = format!("SINCE {}", since_date);
 
         on_progress("Checking for new mail…");
@@ -238,7 +242,7 @@ pub async fn sync_mailbox(
         // In a more complex system we'd check the DB for existing UIDs here.
 
         if !uids.is_empty() {
-            for chunk in uids.chunks(BATCH_SIZES[BATCH_SIZES.len()-1] as usize) {
+            for chunk in uids.chunks(BATCH_SIZES[BATCH_SIZES.len() - 1] as usize) {
                 let uid_range = format_uid_sequence_set(chunk);
                 on_progress(&format!("Fetching new mail… {} so far", all_results.len()));
 
@@ -247,7 +251,7 @@ pub async fn sync_mailbox(
                     .await?
                     .try_collect()
                     .await?;
-                
+
                 let gmail_labels = if account.provider == "gmail" {
                     fetch_gmail_vibemail_labels(session, &uid_range).await?
                 } else {
@@ -261,7 +265,7 @@ pub async fn sync_mailbox(
                 all_results.extend(batch_results);
             }
         }
-        
+
         mailbox.last_synced_at = Some(sync_start_time);
     }
 
@@ -301,8 +305,15 @@ async fn refresh_missing_attachments(
         return Ok(());
     }
 
-    on_progress(&format!("Refreshing {} messages with attachments…", missing_uids.len()));
-    info!("Refreshing {} messages with attachments for {}", missing_uids.len(), mailbox.name);
+    on_progress(&format!(
+        "Refreshing {} messages with attachments…",
+        missing_uids.len()
+    ));
+    info!(
+        "Refreshing {} messages with attachments for {}",
+        missing_uids.len(),
+        mailbox.name
+    );
 
     for chunk in missing_uids.chunks(50) {
         let uid_range = format_uid_sequence_set(chunk);
@@ -311,7 +322,7 @@ async fn refresh_missing_attachments(
             .await?
             .try_collect()
             .await?;
-        
+
         let gmail_labels = if account.provider == "gmail" {
             fetch_gmail_vibemail_labels(session, &uid_range).await?
         } else {
@@ -404,7 +415,7 @@ pub async fn persist_batch(
 ) -> Result<()> {
     // 1. Collect all messages for threading: those in the batch + those already in the DB for affected threads
     let mut all_thread_messages = Vec::new();
-    
+
     // Start with all messages in the current batch
     for (msg, _) in batch {
         all_thread_messages.push(msg.clone());
@@ -438,21 +449,21 @@ pub async fn persist_batch(
     // 5. Persist everything
     let db_lock = db.lock().await;
     db_lock.upsert_mailbox(mailbox)?;
-    
+
     let mut thread_count = 0;
     let mut msg_count = 0;
 
     for thread in &updated_threads {
         if let Err(e) = db_lock.upsert_thread(thread) {
             println!(">>> DB ERROR: upsert_thread failed: {}", e);
-            return Err(e.into());
+            return Err(e);
         }
         thread_count += 1;
         if let Some(msgs) = &thread.messages {
             for msg in msgs {
                 if let Err(e) = db_lock.upsert_message(msg) {
                     println!(">>> DB ERROR: upsert_message failed: {}", e);
-                    return Err(e.into());
+                    return Err(e);
                 }
                 msg_count += 1;
                 // Only update attachments for messages that were in our current batch
@@ -461,15 +472,21 @@ pub async fn persist_batch(
                     for att in atts {
                         if let Err(e) = db_lock.upsert_attachment(att) {
                             println!(">>> DB ERROR: upsert_attachment failed: {}", e);
-                            return Err(e.into());
+                            return Err(e);
                         }
                     }
                 }
             }
         }
     }
-    println!(">>> DB: Successfully persisted {} threads and {} messages", thread_count, msg_count);
-    info!("Persisted {} threads and {} messages", thread_count, msg_count);
+    println!(
+        ">>> DB: Successfully persisted {} threads and {} messages",
+        thread_count, msg_count
+    );
+    info!(
+        "Persisted {} threads and {} messages",
+        thread_count, msg_count
+    );
     Ok(())
 }
 

@@ -198,9 +198,9 @@ pub async fn extract_actions(
     ];
 
     let response = router
-            .complete(TaskKind::Extract, chat_messages)
-            .await
-            .map_err(|e| e.to_string())?;
+        .complete(TaskKind::Extract, chat_messages)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let actions = parse_extracted_actions(&response).map_err(|e| e.to_string())?;
     {
@@ -253,9 +253,9 @@ pub async fn triage_thread(
     ];
 
     let response = router
-            .complete(TaskKind::Triage, chat_messages)
-            .await
-            .map_err(|e| e.to_string())?;
+        .complete(TaskKind::Triage, chat_messages)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let score = parse_triage_score(&response);
     {

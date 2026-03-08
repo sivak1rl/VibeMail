@@ -34,8 +34,6 @@ pub trait AiProvider: Send + Sync {
     async fn stream_complete(&self, req: CompletionRequest) -> Result<TokenStream>;
     async fn embed(&self, model: &str, text: &str) -> Result<Vec<f32>>;
     async fn embed_batch(&self, model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>>;
-    fn supports_tools(&self) -> bool;
-    fn name(&self) -> &str;
 }
 
 /// Truncate thread content to fit within token budget (rough estimate: 4 chars ≈ 1 token)

@@ -61,37 +61,34 @@ pub fn parse_category_label(raw: &str, allowed_categories: &[String]) -> String 
 
     let compact = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
 
-    if compact.contains("receipt")
+    if (compact.contains("receipt")
         || compact.contains("invoice")
         || compact.contains("billing")
-        || compact.contains("payment")
+        || compact.contains("payment"))
+        && allowed.contains("receipt")
     {
-        if allowed.contains("receipt") {
-            return "receipt".to_string();
-        }
+        return "receipt".to_string();
     }
-    if compact.contains("newsletter") || compact.contains("digest") {
-        if allowed.contains("newsletter") {
-            return "newsletter".to_string();
-        }
+    if (compact.contains("newsletter") || compact.contains("digest"))
+        && allowed.contains("newsletter")
+    {
+        return "newsletter".to_string();
     }
-    if compact.contains("social")
+    if (compact.contains("social")
         || compact.contains("friend")
         || compact.contains("community")
-        || compact.contains("network")
+        || compact.contains("network"))
+        && allowed.contains("social")
     {
-        if allowed.contains("social") {
-            return "social".to_string();
-        }
+        return "social".to_string();
     }
-    if compact.contains("update")
+    if (compact.contains("update")
         || compact.contains("notification")
         || compact.contains("automated")
-        || compact.contains("system")
+        || compact.contains("system"))
+        && allowed.contains("updates")
     {
-        if allowed.contains("updates") {
-            return "updates".to_string();
-        }
+        return "updates".to_string();
     }
 
     for category in allowed_categories {

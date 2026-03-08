@@ -20,9 +20,10 @@ interface SearchStore {
     mailboxId?: string | null,
   ) => Promise<void>;
   loadMore: (accountId: string, mailboxId?: string | null) => Promise<void>;
-  reindexAll: (accountId: string) => Promise<void>;
+  reindexAll: (accountId: string, force?: boolean) => Promise<void>;
   clear: () => void;
   loadHistory: () => void;
+  addToHistory: (query: string) => void;
   clearHistory: () => void;
 }
 
@@ -75,8 +76,8 @@ export const useSearchStore = create<SearchStore>((set, get) => ({
         request: { query, account_id: accountId, mailbox_id: mailboxId, limit: PAGE_SIZE },
       });
       set({ results, searching: false, hasMore: results.length >= PAGE_SIZE });
-      (get() as any).addToHistory(query);
-    } catch (e) {
+      get().addToHistory(query);
+    } catch {
       set({ searching: false });
     }
   },
@@ -92,8 +93,8 @@ export const useSearchStore = create<SearchStore>((set, get) => ({
         request: { query, account_id: accountId, mailbox_id: mailboxId, limit: PAGE_SIZE },
       });
       set({ results, searching: false, hasMore: results.length >= PAGE_SIZE });
-      (get() as any).addToHistory(query);
-    } catch (e) {
+      get().addToHistory(query);
+    } catch {
       set({ searching: false });
     }
   },
@@ -119,7 +120,7 @@ export const useSearchStore = create<SearchStore>((set, get) => ({
         searching: false,
         hasMore: more.length >= PAGE_SIZE,
       });
-    } catch (e) {
+    } catch {
       set({ searching: false });
     }
   },
@@ -141,6 +142,7 @@ export const useSearchStore = create<SearchStore>((set, get) => ({
         const isReindexing = await invoke<boolean>("get_reindex_status", { accountId });
         if (!isReindexing) {
           if (pollTimer) clearInterval(pollTimer);
+          if (unlisten) unlisten();
           set({ reindexing: false, reindexProgress: null });
         }
       };
@@ -153,6 +155,7 @@ export const useSearchStore = create<SearchStore>((set, get) => ({
       if (String(e).includes("already in progress")) {
         // Fall through to polling
       } else {
+        if (unlisten) unlisten();
         set({ reindexing: false, reindexProgress: null });
         throw e;
       }

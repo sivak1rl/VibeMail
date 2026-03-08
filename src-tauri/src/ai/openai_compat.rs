@@ -212,12 +212,4 @@ impl AiProvider for OpenAICompatProvider {
 
         Ok(Box::pin(token_stream))
     }
-
-    fn supports_tools(&self) -> bool {
-        true
-    }
-
-    fn name(&self) -> &str {
-        "openai_compat"
-    }
 }

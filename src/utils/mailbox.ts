@@ -10,7 +10,6 @@ export interface MailboxTreeNode {
 
 export function buildMailboxTree(mailboxes: Mailbox[]): MailboxTreeNode[] {
   const root: MailboxTreeNode[] = [];
-  const map: Record<string, MailboxTreeNode> = {};
 
   // Sort mailboxes by name length to ensure parents are processed before or at least correctly
   const sorted = [...mailboxes].sort((a, b) => a.name.localeCompare(b.name));

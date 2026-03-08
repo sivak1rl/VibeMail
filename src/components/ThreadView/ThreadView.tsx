@@ -53,7 +53,7 @@ function AttachmentItem({ att }: { att: AttachmentMetadata }) {
             if (typeof URL !== 'undefined' && URL.revokeObjectURL) {
               URL.revokeObjectURL(urlToRevoke);
             }
-          } catch (e) {}
+          } catch {}
         }, 0);
       }
     };
@@ -140,7 +140,7 @@ function MessagePreviews({ attachments }: { attachments: AttachmentMetadata[] })
             if (typeof URL !== 'undefined' && URL.revokeObjectURL) {
                URL.revokeObjectURL(url);
             }
-          } catch (e) {
+          } catch {
             // Ignore cleanup errors
           }
         });
