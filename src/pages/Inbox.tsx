@@ -49,7 +49,7 @@ export default function Inbox({ onSettings }: Props) {
 
   const { results: searchResults, query: searchQuery, clear: clearSearch } = useSearchStore();
   const { loadConfig, summarizeThreads, categorizeThreads, batchSummarizing, batchCategorizing } = useAiStore();
-  const { autoLabelNewEmails, customCategories, autoSyncIntervalMinutes, historyFetchDays, historyFetchLimit } = usePreferencesStore();
+  const { autoLabelNewEmails, customCategories, historyFetchDays, historyFetchLimit } = usePreferencesStore();
 
   const [showSearch, setShowSearch] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);

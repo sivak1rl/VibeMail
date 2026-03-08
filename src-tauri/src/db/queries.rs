@@ -756,13 +756,15 @@ impl Database {
         };
 
         let mut stmt = self.conn.prepare(&sql)?;
-        
+
         let rows = if let Some(mid) = mailbox_id {
-            let mut params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            let mut params: Vec<&dyn rusqlite::ToSql> =
+                ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
             params.push(&mid as &dyn rusqlite::ToSql);
             stmt.query_map(params.as_slice(), map_thread)?
         } else {
-            let params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+            let params: Vec<&dyn rusqlite::ToSql> =
+                ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
             stmt.query_map(params.as_slice(), map_thread)?
         };
 

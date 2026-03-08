@@ -83,7 +83,7 @@ export const useAiStore = create<AiState>((set, get) => ({
     try {
       const config = await invoke<AiConfig>("get_ai_config");
       set({ config, configLoaded: true });
-    } catch (e) {
+    } catch {
       set({ configLoaded: true });
     }
   },
@@ -206,7 +206,7 @@ export const useAiStore = create<AiState>((set, get) => ({
       await invoke("draft_reply", {
         request: { thread_id: threadId, account_id: "" },
       });
-    } catch (e) {
+    } catch {
       set((s) => ({
         draftStreaming: { ...s.draftStreaming, [threadId]: false },
       }));

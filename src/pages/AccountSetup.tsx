@@ -16,7 +16,6 @@ export default function AccountSetup({ onDone }: Props) {
   const [provider, setProvider] = useState<"gmail" | "outlook" | "generic">("gmail");
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
-  const [_pendingAccountId, setPendingAccountId] = useState<string | null>(null);
   const [genericForm, setGenericForm] = useState({
     name: "",
     email: "",
