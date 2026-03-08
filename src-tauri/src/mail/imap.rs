@@ -456,14 +456,14 @@ pub async fn persist_batch(
     for thread in &updated_threads {
         if let Err(e) = db_lock.upsert_thread(thread) {
             println!(">>> DB ERROR: upsert_thread failed: {}", e);
-            return Err(e.into());
+            return Err(e);
         }
         thread_count += 1;
         if let Some(msgs) = &thread.messages {
             for msg in msgs {
                 if let Err(e) = db_lock.upsert_message(msg) {
                     println!(">>> DB ERROR: upsert_message failed: {}", e);
-                    return Err(e.into());
+                    return Err(e);
                 }
                 msg_count += 1;
                 // Only update attachments for messages that were in our current batch
@@ -472,7 +472,7 @@ pub async fn persist_batch(
                     for att in atts {
                         if let Err(e) = db_lock.upsert_attachment(att) {
                             println!(">>> DB ERROR: upsert_attachment failed: {}", e);
-                            return Err(e.into());
+                            return Err(e);
                         }
                     }
                 }

@@ -107,8 +107,7 @@ pub async fn await_oauth_redirect(
     let callback = flow
         .rx
         .await
-        .map_err(|_| "OAuth listener task was dropped".to_string())?
-        .map_err(|e| e)?;
+        .map_err(|_| "OAuth listener task was dropped".to_string())??;
 
     let code_verifier = flow.code_verifier;
     let client_id = flow.client_id;

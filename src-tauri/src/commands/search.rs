@@ -191,10 +191,7 @@ pub async fn reindex_all_semantic(
         }
         .await;
 
-        let err = match result {
-            Ok(_) => None,
-            Err(e) => Some(e),
-        };
+        let err = result.err();
 
         let mut mgr: tokio::sync::MutexGuard<'_, SyncManager> = sync_mgr_clone.lock().await;
         mgr.finish_sync(&format!("reindex:{}", account_id_task), err);
