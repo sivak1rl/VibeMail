@@ -36,13 +36,12 @@ export default function AccountSetup({ onDone }: Props) {
     try {
       const res = await invoke<{ url: string; account_id: string }>("get_oauth_url", {
         provider: p,
-        clientId,
-        clientSecret: clientSecret || null,
-      });
+        client_id: clientId,
+        client_secret: clientSecret || null,
+        });
 
-      setPendingAccountId(res.account_id);
+        // Start listener BEFORE opening browser so port 7887 is ready
 
-      // Start listener BEFORE opening browser so port 7887 is ready
       const redirectPromise = invoke("await_oauth_redirect", {
         accountId: res.account_id,
       });
