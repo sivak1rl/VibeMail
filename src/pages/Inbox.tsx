@@ -9,7 +9,7 @@ import { buildMailboxTree, type MailboxTreeNode } from "../utils/mailbox";
 import InboxList from "../components/InboxList/InboxList";
 import ThreadView from "../components/ThreadView/ThreadView";
 import SearchBar from "../components/SearchBar/SearchBar";
-import Compose from "../components/Compose/Compose";
+import Compose, { type ComposeMode } from "../components/Compose/Compose";
 import styles from "./Inbox.module.css";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -59,7 +59,7 @@ export default function Inbox({ onSettings }: Props) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
   const [lastSelectedThreadId, setLastSelectedThreadId] = useState<string | null>(null);
-  const [showReplyCompose, setShowReplyCompose] = useState(false);
+  const [replyComposeMode, setReplyComposeMode] = useState<ComposeMode | null>(null);
   const [showNewCompose, setShowNewCompose] = useState(false);
   const [newComposeExpanded, setNewComposeExpanded] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
@@ -318,7 +318,7 @@ export default function Inbox({ onSettings }: Props) {
 
   // Close reply compose when thread changes
   useEffect(() => {
-    setShowReplyCompose(false);
+    setReplyComposeMode(null);
   }, [selectedThreadId]);
 
   // Keyboard shortcuts
@@ -340,7 +340,7 @@ export default function Inbox({ onSettings }: Props) {
       if (e.key === "Escape") {
         if (showHelpModal) { setShowHelpModal(false); return; }
         if (showNewCompose) { setShowNewCompose(false); return; }
-        if (showReplyCompose) { setShowReplyCompose(false); return; }
+        if (replyComposeMode !== null) { setReplyComposeMode(null); return; }
         setSelectedThreadIds([]);
         return;
       }
@@ -361,7 +361,7 @@ export default function Inbox({ onSettings }: Props) {
           break;
         }
         case "r": {
-          if (selectedThreadId) setShowReplyCompose(true);
+          if (selectedThreadId) setReplyComposeMode("reply");
           break;
         }
         case "a": {
@@ -409,7 +409,7 @@ export default function Inbox({ onSettings }: Props) {
     selectedThreadId,
     showHelpModal,
     showNewCompose,
-    showReplyCompose,
+    replyComposeMode,
     selectThread,
     archiveThreads,
     setThreadsRead,
@@ -640,9 +640,10 @@ export default function Inbox({ onSettings }: Props) {
         <ThreadView
           thread={selectedThread}
           messages={threadMessages}
-          composeOpen={showReplyCompose}
-          onComposeClose={() => setShowReplyCompose(false)}
-          onReplyClick={() => setShowReplyCompose(true)}
+          composeOpen={replyComposeMode !== null}
+          composeMode={replyComposeMode ?? "reply"}
+          onComposeClose={() => setReplyComposeMode(null)}
+          onReplyClick={setReplyComposeMode}
         />
       </div>
 

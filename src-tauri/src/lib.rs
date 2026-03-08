@@ -93,6 +93,7 @@ pub fn run() {
             commands::ai::summarize_thread,
             commands::ai::draft_reply,
             commands::ai::draft_new,
+            commands::ai::proofread_text,
             commands::ai::extract_actions,
             commands::ai::triage_thread,
             commands::ai::categorize_threads,

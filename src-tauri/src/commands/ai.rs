@@ -197,6 +197,33 @@ pub async fn draft_new(
         .map_err(|e| e.to_string())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProofreadRequest {
+    pub text: String,
+}
+
+#[tauri::command]
+pub async fn proofread_text(
+    request: ProofreadRequest,
+    router: State<'_, Arc<AiRouter>>,
+) -> Result<String, String> {
+    let text: String = request.text.chars().take(8000).collect();
+    let chat_messages = vec![
+        ChatMessage {
+            role: "system".into(),
+            content: "You are a proofreader. Fix grammar, spelling, punctuation, and clarity in the provided text. Preserve the original meaning and tone. Return only the corrected text with no commentary or explanation.".into(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: text,
+        },
+    ];
+    router
+        .complete(TaskKind::Draft, chat_messages)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn extract_actions(
     request: AiThreadRequest,

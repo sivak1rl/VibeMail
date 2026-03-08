@@ -6,7 +6,7 @@ import type { Message, Thread } from "../../stores/threads";
 import { useThreadStore } from "../../stores/threads";
 import { useAiStore } from "../../stores/ai";
 import AIPanel from "../AIPanel/AIPanel";
-import Compose from "../Compose/Compose";
+import Compose, { type ComposeMode } from "../Compose/Compose";
 import { usePreferencesStore } from "../../stores/preferences";
 import styles from "./ThreadView.module.css";
 
@@ -14,8 +14,9 @@ interface Props {
   thread: Thread | null;
   messages: Message[];
   composeOpen: boolean;
+  composeMode?: ComposeMode;
   onComposeClose: () => void;
-  onReplyClick: () => void;
+  onReplyClick: (mode: ComposeMode) => void;
 }
 
 interface AttachmentMetadata {
@@ -327,7 +328,7 @@ function AttachmentPanel({ threadId }: { threadId: string }) {
   );
 }
 
-export default function ThreadView({ thread, messages, composeOpen, onComposeClose, onReplyClick }: Props) {
+export default function ThreadView({ thread, messages, composeOpen, composeMode, onComposeClose, onReplyClick }: Props) {
   const [isExpanded, setIsExpanded] = useState(false);
   const { setThreadsRead, setThreadsFlagged, archiveThreads } = useThreadStore();
   const { actionsByThread, loadThreadInsights } = useAiStore();
@@ -399,9 +400,21 @@ export default function ThreadView({ thread, messages, composeOpen, onComposeClo
               </button>
               <button
                 className={styles.replyBtn}
-                onClick={onReplyClick}
+                onClick={() => onReplyClick("reply")}
               >
                 Reply
+              </button>
+              <button
+                className={styles.replyBtn}
+                onClick={() => onReplyClick("replyAll")}
+              >
+                Reply All
+              </button>
+              <button
+                className={styles.replyBtn}
+                onClick={() => onReplyClick("forward")}
+              >
+                Forward
               </button>
             </div>
           </div>
@@ -438,6 +451,7 @@ export default function ThreadView({ thread, messages, composeOpen, onComposeClo
             <Compose
               thread={thread}
               messages={messages}
+              mode={composeMode ?? "reply"}
               onClose={onComposeClose}
             />
           )}

@@ -3,7 +3,6 @@
   background: var(--color-surface);
   display: flex;
   flex-direction: column;
-  height: 100%;
 }
 
 
@@ -69,13 +68,49 @@
 .metaLabel { color: var(--color-text-muted); font-weight: 500; width: 50px; }
 .metaValue { color: var(--color-text); }
 .metaInput {
-  flex: 1;
+  width: 100%;
   background: none;
   border: none;
   outline: none;
   color: var(--color-text);
   font-size: 12px;
 }
+
+.metaToggle {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.metaToggle:hover { background: var(--color-surface2); color: var(--color-text); }
+
+.autocomplete {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  z-index: 500;
+  overflow: hidden;
+}
+
+.autocompleteItem {
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--color-text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.autocompleteItem:hover { background: var(--color-surface2); }
 
 .bodyArea {
   flex: 1;
@@ -221,6 +256,26 @@
 .aiGenerateBtn:hover { background: var(--color-accent-hover, #3a7bd5); }
 .aiGenerateBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+.aiProofreadBtn {
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  width: 100%;
+}
+.aiProofreadBtn:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.aiProofreadBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.aiInsertedHint {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  text-align: center;
+  margin: 0;
+}
+
 .aiStream {
   font-size: 11px;
   color: var(--color-text-muted);
@@ -236,3 +291,116 @@
   animation: blink 1s step-end infinite;
 }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* Proofread diff review */
+.diffReview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.diffHeader {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.diffList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.diffItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 8px;
+  background: var(--color-surface);
+}
+
+.diffAccepted {
+  border-color: var(--color-accent);
+  background: var(--color-surface2, var(--color-surface));
+}
+
+.diffRejected {
+  opacity: 0.8;
+}
+
+.diffContent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diffOld {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+}
+
+.diffNew {
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.diffEmpty {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.diffArrow {
+  color: var(--color-text-muted);
+}
+
+.diffToggle {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.diffToggle:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.diffActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.diffBtn {
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.diffBtn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}

@@ -1,13 +1,163 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { Message, Thread } from "../../stores/threads";
+import { useThreadStore } from "../../stores/threads";
 import { useAccountStore } from "../../stores/accounts";
 import { useAiStore } from "../../stores/ai";
+import { usePreferencesStore } from "../../stores/preferences";
 import styles from "./Compose.module.css";
+
+export type ComposeMode = "new" | "reply" | "replyAll" | "forward";
+
+// ── Proofread diff types & utilities ──────────────────────────────────────────
+
+type EqualChunk = { id: number; type: "equal"; text: string };
+type ChangeChunk = { id: number; type: "change"; original: string; revised: string; accepted: boolean };
+type DiffChunk = EqualChunk | ChangeChunk;
+
+/** Split text into word + whitespace tokens, preserving all content. */
+function tokenize(text: string): string[] {
+  return text.split(/(\s+)/).filter((t) => t.length > 0);
+}
+
+/** LCS-based word-level diff between original and revised text. */
+function computeDiff(original: string, revised: string): DiffChunk[] {
+  const a = tokenize(original);
+  const b = tokenize(revised);
+  const m = a.length;
+  const n = b.length;
+
+  // Build LCS table
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+
+  // Backtrack to produce ops
+  type Op = { type: "equal" | "delete" | "insert"; text: string };
+  const ops: Op[] = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      ops.unshift({ type: "equal", text: a[i - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      ops.unshift({ type: "insert", text: b[j - 1] });
+      j--;
+    } else {
+      ops.unshift({ type: "delete", text: a[i - 1] });
+      i--;
+    }
+  }
+
+  // Group consecutive delete+insert runs into change chunks
+  const chunks: DiffChunk[] = [];
+  let id = 0;
+  let idx = 0;
+  while (idx < ops.length) {
+    if (ops[idx].type === "equal") {
+      chunks.push({ id: id++, type: "equal", text: ops[idx].text });
+      idx++;
+    } else {
+      const dels: string[] = [];
+      const ins: string[] = [];
+      while (idx < ops.length && ops[idx].type !== "equal") {
+        if (ops[idx].type === "delete") dels.push(ops[idx].text);
+        else ins.push(ops[idx].text);
+        idx++;
+      }
+      chunks.push({
+        id: id++,
+        type: "change",
+        original: dels.join(""),
+        revised: ins.join(""),
+        accepted: true,
+      });
+    }
+  }
+  return chunks;
+}
+
+function reconstructFromChunks(chunks: DiffChunk[]): string {
+  return chunks.map((c) => (c.type === "equal" ? c.text : c.accepted ? c.revised : c.original)).join("");
+}
+
+// ── ProofreadReview component ─────────────────────────────────────────────────
+
+function ProofreadReview({
+  chunks,
+  onToggle,
+  onAcceptAll,
+  onRejectAll,
+  onApply,
+  onCancel,
+}: {
+  chunks: DiffChunk[];
+  onToggle: (id: number) => void;
+  onAcceptAll: () => void;
+  onRejectAll: () => void;
+  onApply: () => void;
+  onCancel: () => void;
+}) {
+  const changes = chunks.filter((c): c is ChangeChunk => c.type === "change");
+  const accepted = changes.filter((c) => c.accepted).length;
+
+  return (
+    <div className={styles.diffReview}>
+      <div className={styles.diffHeader}>
+        {changes.length} change{changes.length !== 1 ? "s" : ""} · {accepted} accepted
+      </div>
+
+      <div className={styles.diffList}>
+        {changes.map((chunk) => (
+          <div
+            key={chunk.id}
+            className={`${styles.diffItem} ${chunk.accepted ? styles.diffAccepted : styles.diffRejected}`}
+          >
+            <div className={styles.diffContent}>
+              {chunk.original ? (
+                <span className={styles.diffOld}>{chunk.original}</span>
+              ) : (
+                <span className={styles.diffEmpty}>(empty)</span>
+              )}
+              <span className={styles.diffArrow}>→</span>
+              {chunk.revised ? (
+                <span className={styles.diffNew}>{chunk.revised}</span>
+              ) : (
+                <span className={styles.diffEmpty}>(removed)</span>
+              )}
+            </div>
+            <button
+              className={styles.diffToggle}
+              onClick={() => onToggle(chunk.id)}
+              title={chunk.accepted ? "Reject this change" : "Accept this change"}
+            >
+              {chunk.accepted ? "✗" : "✓"}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className={styles.diffActions}>
+        <button className={styles.diffBtn} onClick={onAcceptAll}>Accept All</button>
+        <button className={styles.diffBtn} onClick={onRejectAll}>Reject All</button>
+      </div>
+      <button className={styles.aiGenerateBtn} onClick={onApply}>
+        Apply {accepted} change{accepted !== 1 ? "s" : ""}
+      </button>
+      <button className={styles.aiProofreadBtn} onClick={onCancel}>Cancel Review</button>
+    </div>
+  );
+}
+
+// ── Contact autocomplete ──────────────────────────────────────────────────────
 
 interface Props {
   thread?: Thread;
   messages?: Message[];
+  mode?: ComposeMode;
   onClose: () => void;
   expanded?: boolean;
   onExpandChange?: (expanded: boolean) => void;
@@ -15,55 +165,249 @@ interface Props {
 
 const NEW_KEY = "__new__";
 
-export default function Compose({ thread, messages = [], onClose, expanded = false, onExpandChange }: Props) {
-  const { activeAccountId } = useAccountStore();
-  const { draftByThread, draftStreaming, draftReply, draftNew, config } = useAiStore();
+function useContacts() {
+  const threads = useThreadStore((s) => s.threads);
+  return useMemo(() => {
+    const seen = new Map<string, string | null>();
+    for (const t of threads) {
+      for (const p of t.participants) {
+        if (!seen.has(p.email)) seen.set(p.email, p.name ?? null);
+      }
+    }
+    return Array.from(seen.entries()).map(([email, name]) => ({ email, name }));
+  }, [threads]);
+}
 
-  const isReply = !!thread;
-  const lastMsg = messages[messages.length - 1];
+function parseAddrs(s: string) {
+  return s.split(",").map((x) => x.trim()).filter(Boolean).map((email) => ({ name: null, email }));
+}
 
-  const [to, setTo] = useState(lastMsg?.from[0]?.email ?? "");
-  const [subject, setSubject] = useState(
-    isReply
-      ? (thread.subject?.startsWith("Re:") ? thread.subject : `Re: ${thread.subject ?? ""}`)
-      : ""
+interface ContactInputProps {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  autoFocus?: boolean;
+  contacts: { email: string; name: string | null }[];
+  readOnly?: boolean;
+}
+
+function ContactInput({ value, onChange, placeholder, autoFocus, contacts, readOnly }: ContactInputProps) {
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const currentToken = value.split(",").pop()?.trim() ?? "";
+
+  const suggestions = useMemo(() => {
+    if (!currentToken || currentToken.length < 2) return [];
+    const lower = currentToken.toLowerCase();
+    return contacts
+      .filter((c) => c.email.toLowerCase().includes(lower) || (c.name && c.name.toLowerCase().includes(lower)))
+      .slice(0, 6);
+  }, [currentToken, contacts]);
+
+  const handleSelect = (email: string) => {
+    const parts = value.split(",");
+    parts[parts.length - 1] = " " + email;
+    onChange(parts.join(",").trimStart() + ", ");
+    setOpen(false);
+    inputRef.current?.focus();
+  };
+
+  if (readOnly) return <span className={styles.metaValue}>{value}</span>;
+
+  return (
+    <div style={{ position: "relative", flex: 1 }}>
+      <input
+        ref={inputRef}
+        className={styles.metaInput}
+        value={value}
+        onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onFocus={() => setOpen(true)}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+      />
+      {open && suggestions.length > 0 && (
+        <div className={styles.autocomplete}>
+          {suggestions.map((c) => (
+            <div
+              key={c.email}
+              className={styles.autocompleteItem}
+              onMouseDown={(e) => { e.preventDefault(); handleSelect(c.email); }}
+            >
+              {c.name ? `${c.name} <${c.email}>` : c.email}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
-  const [body, setBody] = useState("");
+}
+
+// ── Main Compose component ────────────────────────────────────────────────────
+
+export default function Compose({
+  thread,
+  messages = [],
+  mode: modeProp,
+  onClose,
+  expanded = false,
+  onExpandChange,
+}: Props) {
+  const { activeAccountId, accounts } = useAccountStore();
+  const { draftByThread, draftStreaming, draftReply, draftNew, config } = useAiStore();
+  const { signatures } = usePreferencesStore();
+  const contacts = useContacts();
+
+  const mode: ComposeMode = modeProp ?? (thread ? "reply" : "new");
+  const lastMsg = messages[messages.length - 1];
+  const activeAccount = accounts.find((a) => a.id === activeAccountId);
+  const signature = activeAccountId ? (signatures[activeAccountId] ?? "") : "";
+
+  const [to, setTo] = useState<string>(() => {
+    if (mode === "reply") return lastMsg?.from[0]?.email ?? "";
+    if (mode === "replyAll") {
+      return thread?.participants
+        .filter((p) => p.email.toLowerCase() !== activeAccount?.email.toLowerCase())
+        .map((p) => p.email)
+        .join(", ") ?? "";
+    }
+    return "";
+  });
+
+  const [subject, setSubject] = useState<string>(() => {
+    if (mode === "reply" || mode === "replyAll") {
+      return thread?.subject?.startsWith("Re:") ? thread.subject : `Re: ${thread?.subject ?? ""}`;
+    }
+    if (mode === "forward") {
+      const s = thread?.subject ?? "";
+      return s.startsWith("Fwd:") ? s : `Fwd: ${s}`;
+    }
+    return "";
+  });
+
+  const [body, setBody] = useState<string>(() => {
+    const sig = signature ? `\n\n--\n${signature}` : "";
+    if (mode === "forward" && lastMsg) {
+      const from = lastMsg.from.map((f) => f.name ? `${f.name} <${f.email}>` : f.email).join(", ");
+      const quoted = (lastMsg.body_text ?? "").split("\n").map((l) => `> ${l}`).join("\n");
+      return `${sig}\n\n---------- Forwarded message ----------\nFrom: ${from}\nDate: ${lastMsg.date ?? ""}\n\n${quoted}`;
+    }
+    if ((mode === "reply" || mode === "replyAll") && lastMsg) {
+      const from = lastMsg.from.map((f) => f.name ? `${f.name} <${f.email}>` : f.email).join(", ");
+      const quoted = (lastMsg.body_text ?? "").split("\n").map((l) => `> ${l}`).join("\n");
+      return `${sig}\n\nOn ${lastMsg.date ?? ""}, ${from} wrote:\n${quoted}`;
+    }
+    return sig ? sig.trimStart() : "";
+  });
+
+  const [cc, setCc] = useState("");
+  const [bcc, setBcc] = useState("");
+  const [showCc, setShowCc] = useState(false);
+  const [showBcc, setShowBcc] = useState(false);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiError, setAiError] = useState<string | null>(null);
+  const [proofreading, setProofreading] = useState(false);
+  const [proofreadError, setProofreadError] = useState<string | null>(null);
+  const [proofreadChunks, setProofreadChunks] = useState<DiffChunk[] | null>(null);
+  const [proofreadQuoted, setProofreadQuoted] = useState("");
+  // Which draft key is streaming/displayed in the AI panel
+  const [activeDraftKey, setActiveDraftKey] = useState(mode !== "new" && thread ? thread.id : NEW_KEY);
 
-  const draftKey = isReply ? thread.id : NEW_KEY;
-  const draft = draftByThread[draftKey];
-  const isGenerating = draftStreaming[draftKey];
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const insertAt = useRef<number>(0);
+  const prevStreaming = useRef(false);
 
-  // When draft is ready, populate the body
+  const draft = draftByThread[activeDraftKey];
+  const isGenerating = draftStreaming[activeDraftKey] ?? false;
+
+  // When generation finishes, insert the completed draft at the recorded cursor position.
   useEffect(() => {
-    if (draft && !isGenerating && !body) {
-      setBody(draft);
+    const wasGenerating = prevStreaming.current;
+    prevStreaming.current = isGenerating;
+    if (wasGenerating && !isGenerating && draft) {
+      const pos = insertAt.current;
+      setBody((prev) => {
+        const before = prev.slice(0, pos);
+        const after = prev.slice(pos);
+        const sep = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
+        return before + sep + draft + after;
+      });
+      requestAnimationFrame(() => textareaRef.current?.focus());
     }
   }, [draft, isGenerating]);
 
+  // Live preview body while reviewing proofread changes
+  const bodyDisplay = proofreadChunks
+    ? reconstructFromChunks(proofreadChunks) + (proofreadQuoted ? "\n" + proofreadQuoted : "")
+    : body;
+
   const handleReplyAIDraft = async () => {
     if (!thread) return;
-    setError(null);
+    setAiError(null);
+    insertAt.current = textareaRef.current?.selectionStart ?? body.length;
+    setActiveDraftKey(thread.id);
     try {
       await draftReply(thread.id);
     } catch (e) {
-      setError(String(e));
+      setAiError(String(e));
     }
   };
 
-  const handleNewAIDraft = async () => {
+  const handleCustomGenerate = async () => {
     if (!aiPrompt.trim()) return;
     setAiError(null);
+    insertAt.current = textareaRef.current?.selectionStart ?? body.length;
+    setActiveDraftKey(NEW_KEY);
     try {
-      const result = await draftNew(aiPrompt.trim());
-      if (result) setBody(result);
+      await draftNew(aiPrompt.trim());
     } catch (e) {
       setAiError(String(e));
     }
+  };
+
+  const handleProofread = async () => {
+    setProofreadError(null);
+    const lines = body.split("\n");
+    const firstQuoteIdx = lines.findIndex((l) => l.startsWith(">"));
+    const nonQuoted = firstQuoteIdx === -1 ? body : lines.slice(0, firstQuoteIdx).join("\n");
+    const quoted = firstQuoteIdx === -1 ? "" : lines.slice(firstQuoteIdx).join("\n");
+    if (!nonQuoted.trim()) return;
+    setProofreading(true);
+    try {
+      const result = await invoke<string>("proofread_text", { request: { text: nonQuoted } });
+      const chunks = computeDiff(nonQuoted, result);
+      if (!chunks.some((c) => c.type === "change")) {
+        setProofreadError("No changes suggested — looks good!");
+        return;
+      }
+      setProofreadQuoted(quoted);
+      setProofreadChunks(chunks);
+    } catch (e) {
+      setProofreadError(String(e));
+    } finally {
+      setProofreading(false);
+    }
+  };
+
+  const toggleChunk = (id: number) => {
+    setProofreadChunks((prev) =>
+      prev?.map((c) => c.type === "change" && c.id === id ? { ...c, accepted: !c.accepted } : c) ?? null,
+    );
+  };
+
+  const applyProofread = () => {
+    if (!proofreadChunks) return;
+    const applied = reconstructFromChunks(proofreadChunks);
+    setBody(proofreadQuoted ? applied + "\n" + proofreadQuoted : applied);
+    setProofreadChunks(null);
+    setProofreadQuoted("");
+  };
+
+  const cancelProofread = () => {
+    setProofreadChunks(null);
+    setProofreadQuoted("");
   };
 
   const handleSend = async () => {
@@ -71,17 +415,18 @@ export default function Compose({ thread, messages = [], onClose, expanded = fal
     setSending(true);
     setError(null);
     try {
+      const isReplyMode = mode === "reply" || mode === "replyAll";
       await invoke("send_message", {
         message: {
           account_id: activeAccountId,
-          to: [{ name: null, email: to }],
-          cc: null,
-          bcc: null,
+          to: parseAddrs(to),
+          cc: cc.trim() ? parseAddrs(cc) : null,
+          bcc: bcc.trim() ? parseAddrs(bcc) : null,
           subject,
           body_text: body,
           body_html: null,
-          in_reply_to: lastMsg?.message_id ?? null,
-          references: lastMsg ? [lastMsg.message_id].filter(Boolean) : null,
+          in_reply_to: isReplyMode ? (lastMsg?.message_id ?? null) : null,
+          references: isReplyMode && lastMsg ? [lastMsg.message_id].filter(Boolean) : null,
         },
       });
       onClose();
@@ -92,16 +437,15 @@ export default function Compose({ thread, messages = [], onClose, expanded = fal
     }
   };
 
+  const headerTitle = { new: "New Message", reply: "Reply", replyAll: "Reply All", forward: "Forward" }[mode];
+  const isReplyMode = mode === "reply" || mode === "replyAll";
+
   return (
     <div className={styles.compose}>
       <div className={styles.header}>
-        <span className={styles.headerTitle}>{isReply ? "Reply" : "New Message"}</span>
+        <span className={styles.headerTitle}>{headerTitle}</span>
         <div className={styles.headerActions}>
-          <button
-            className={styles.expandBtn}
-            onClick={() => onExpandChange?.(!expanded)}
-            title={expanded ? "Collapse" : "Expand"}
-          >
+          <button className={styles.expandBtn} onClick={() => onExpandChange?.(!expanded)} title={expanded ? "Collapse" : "Expand"}>
             {expanded ? "⤫" : "⤢"}
           </button>
           <button className={styles.closeBtn} onClick={onClose}>✕</button>
@@ -113,102 +457,131 @@ export default function Compose({ thread, messages = [], onClose, expanded = fal
         <div className={styles.form}>
           <div className={styles.meta}>
             <span className={styles.metaLabel}>To:</span>
-            {isReply ? (
-              <span className={styles.metaValue}>{to}</span>
-            ) : (
-              <input
-                className={styles.metaInput}
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-                placeholder="recipient@example.com"
-                autoFocus={!expanded}
-              />
-            )}
+            <ContactInput
+              value={to} onChange={setTo} placeholder="recipient@example.com"
+              autoFocus={mode !== "reply" && !expanded} contacts={contacts} readOnly={mode === "reply"}
+            />
+            {!showCc && <button className={styles.metaToggle} onClick={() => setShowCc(true)}>Cc</button>}
+            {!showBcc && <button className={styles.metaToggle} onClick={() => setShowBcc(true)}>Bcc</button>}
           </div>
+
+          {showCc && (
+            <div className={styles.meta}>
+              <span className={styles.metaLabel}>Cc:</span>
+              <ContactInput value={cc} onChange={setCc} placeholder="cc@example.com" contacts={contacts} />
+            </div>
+          )}
+
+          {showBcc && (
+            <div className={styles.meta}>
+              <span className={styles.metaLabel}>Bcc:</span>
+              <ContactInput value={bcc} onChange={setBcc} placeholder="bcc@example.com" contacts={contacts} />
+            </div>
+          )}
+
           <div className={styles.meta}>
             <span className={styles.metaLabel}>Subject:</span>
-            {isReply ? (
+            {isReplyMode ? (
               <span className={styles.metaValue}>{subject}</span>
             ) : (
-              <input
-                className={styles.metaInput}
-                value={subject}
-                onChange={(e) => setSubject(e.target.value)}
-                placeholder="Subject"
-              />
+              <input className={styles.metaInput} value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" />
             )}
           </div>
 
           <div className={styles.bodyArea}>
-            {isGenerating && (
-              <div className={styles.generating}>
-                <span className={styles.cursor}>▌</span> Drafting with AI...
-              </div>
-            )}
             <textarea
+              ref={textareaRef}
               className={styles.textarea}
-              value={isGenerating ? (draft ?? "") : body}
-              onChange={(e) => setBody(e.target.value)}
-              disabled={isGenerating || sending}
-              placeholder={isReply ? "Write your reply..." : "Write your message..."}
+              value={bodyDisplay}
+              onChange={(e) => { if (!proofreadChunks) setBody(e.target.value); }}
+              disabled={sending || !!proofreadChunks}
+              placeholder={isReplyMode ? "Write your reply..." : "Write your message..."}
             />
           </div>
 
           {error && <div className={styles.error}>{error}</div>}
 
           <div className={styles.footer}>
-            {isReply && (
-              <button
-                className={styles.aiBtn}
-                onClick={handleReplyAIDraft}
-                disabled={isGenerating || sending}
-              >
-                {isGenerating ? "Generating..." : "✦ Draft with AI"}
-              </button>
-            )}
             <div className={styles.footerRight}>
-              <button className={styles.cancelBtn} onClick={onClose} disabled={sending}>
-                Cancel
-              </button>
-              <button
-                className={styles.sendBtn}
-                onClick={handleSend}
-                disabled={sending || !body.trim() || !to.trim()}
-              >
+              <button className={styles.cancelBtn} onClick={onClose} disabled={sending}>Cancel</button>
+              <button className={styles.sendBtn} onClick={handleSend} disabled={sending || !body.trim() || !to.trim()}>
                 {sending ? "Sending..." : "Send"}
               </button>
             </div>
           </div>
         </div>
 
-        {/* AI assistant panel — only for new compose when expanded or AI enabled */}
-        {!isReply && config?.enabled && (
+        {/* AI panel — shown for all modes when AI is enabled */}
+        {config?.enabled && (
           <div className={styles.aiPanel}>
             <div className={styles.aiPanelHeader}>✦ AI Assistant</div>
-            <p className={styles.aiPanelHint}>
-              Describe what you want to write and let AI draft it for you.
-            </p>
-            <textarea
-              className={styles.aiPrompt}
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder="e.g. Write to Sarah asking for a meeting next week to discuss the Q4 roadmap"
-              rows={5}
-              autoFocus={expanded}
-            />
-            {aiError && <div className={styles.error}>{aiError}</div>}
-            <button
-              className={styles.aiGenerateBtn}
-              onClick={handleNewAIDraft}
-              disabled={!aiPrompt.trim() || !!isGenerating}
-            >
-              {isGenerating ? "Generating..." : "✦ Generate Draft"}
-            </button>
-            {isGenerating && (
-              <div className={styles.aiStream}>
-                <span className={styles.cursor}>▌</span>
-                {draftByThread[NEW_KEY] ?? ""}
-              </div>
+
+            {proofreadChunks ? (
+              <ProofreadReview
+                chunks={proofreadChunks}
+                onToggle={toggleChunk}
+                onAcceptAll={() => setProofreadChunks((p) => p?.map((c) => c.type === "change" ? { ...c, accepted: true } : c) ?? null)}
+                onRejectAll={() => setProofreadChunks((p) => p?.map((c) => c.type === "change" ? { ...c, accepted: false } : c) ?? null)}
+                onApply={applyProofread}
+                onCancel={cancelProofread}
+              />
+            ) : (
+              <>
+                {isReplyMode && thread && (
+                  <button
+                    className={styles.aiGenerateBtn}
+                    onClick={handleReplyAIDraft}
+                    disabled={isGenerating || proofreading}
+                  >
+                    {isGenerating && activeDraftKey === thread.id ? "Drafting..." : "✦ Draft Reply"}
+                  </button>
+                )}
+
+                <p className={styles.aiPanelHint}>
+                  {isReplyMode ? "Or describe what you want to say:" : "Describe what you want to write:"}
+                </p>
+                <textarea
+                  className={styles.aiPrompt}
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  placeholder={
+                    isReplyMode
+                      ? "e.g. Decline politely and suggest next week"
+                      : "e.g. Write to Sarah about a meeting to discuss Q4"
+                  }
+                  rows={4}
+                />
+                <button
+                  className={styles.aiGenerateBtn}
+                  onClick={handleCustomGenerate}
+                  disabled={!aiPrompt.trim() || isGenerating || proofreading}
+                >
+                  {isGenerating && activeDraftKey === NEW_KEY ? "Generating..." : "✦ Generate"}
+                </button>
+
+                <button
+                  className={styles.aiProofreadBtn}
+                  onClick={handleProofread}
+                  disabled={isGenerating || proofreading || !body.trim()}
+                >
+                  {proofreading ? "Proofreading..." : "✎ Proofread"}
+                </button>
+
+                {isGenerating && draft && (
+                  <div className={styles.aiStream}>
+                    <span className={styles.cursor}>▌</span>
+                    {draft}
+                  </div>
+                )}
+
+                {(aiError ?? proofreadError) && (
+                  <div className={styles.error}>{aiError ?? proofreadError}</div>
+                )}
+
+                {!isGenerating && !proofreading && draft && (
+                  <p className={styles.aiInsertedHint}>↑ Inserted at cursor</p>
+                )}
+              </>
             )}
           </div>
         )}
