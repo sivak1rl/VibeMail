@@ -310,8 +310,10 @@ export default function Compose({
   const [aiError, setAiError] = useState<string | null>(null);
   const [proofreading, setProofreading] = useState(false);
   const [proofreadError, setProofreadError] = useState<string | null>(null);
+  const [proofreadInfo, setProofreadInfo] = useState<string | null>(null);
   const [proofreadChunks, setProofreadChunks] = useState<DiffChunk[] | null>(null);
   const [proofreadQuoted, setProofreadQuoted] = useState("");
+  const [justInserted, setJustInserted] = useState(false);
   // Which draft key is streaming/displayed in the AI panel
   const [activeDraftKey, setActiveDraftKey] = useState(mode !== "new" && thread ? thread.id : NEW_KEY);
 
@@ -334,6 +336,8 @@ export default function Compose({
         const sep = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
         return before + sep + draft + after;
       });
+      setJustInserted(true);
+      setTimeout(() => setJustInserted(false), 2500);
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
   }, [draft, isGenerating]);
@@ -369,6 +373,7 @@ export default function Compose({
 
   const handleProofread = async () => {
     setProofreadError(null);
+    setProofreadInfo(null);
     const lines = body.split("\n");
     const firstQuoteIdx = lines.findIndex((l) => l.startsWith(">"));
     const nonQuoted = firstQuoteIdx === -1 ? body : lines.slice(0, firstQuoteIdx).join("\n");
@@ -379,7 +384,7 @@ export default function Compose({
       const result = await invoke<string>("proofread_text", { request: { text: nonQuoted } });
       const chunks = computeDiff(nonQuoted, result);
       if (!chunks.some((c) => c.type === "change")) {
-        setProofreadError("No changes suggested — looks good!");
+        setProofreadInfo("Looks good — no changes suggested.");
         return;
       }
       setProofreadQuoted(quoted);
@@ -504,7 +509,7 @@ export default function Compose({
           <div className={styles.footer}>
             <div className={styles.footerRight}>
               <button className={styles.cancelBtn} onClick={onClose} disabled={sending}>Cancel</button>
-              <button className={styles.sendBtn} onClick={handleSend} disabled={sending || !body.trim() || !to.trim()}>
+              <button className={styles.sendBtn} onClick={handleSend} disabled={sending || !!proofreadChunks || !body.trim() || !to.trim()}>
                 {sending ? "Sending..." : "Send"}
               </button>
             </div>
@@ -577,8 +582,10 @@ export default function Compose({
                 {(aiError ?? proofreadError) && (
                   <div className={styles.error}>{aiError ?? proofreadError}</div>
                 )}
-
-                {!isGenerating && !proofreading && draft && (
+                {proofreadInfo && (
+                  <p className={styles.aiInsertedHint}>{proofreadInfo}</p>
+                )}
+                {justInserted && (
                   <p className={styles.aiInsertedHint}>↑ Inserted at cursor</p>
                 )}
               </>

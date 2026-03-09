@@ -19,7 +19,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Detect and handle token revocation gracefully (re-prompt OAuth)
 
 ### UI/UX
-- [ ] Keyboard shortcuts (j/k navigation, r reply, a archive, e mark read)
+- [x] Keyboard shortcuts (j/k, r reply, a archive, e read, f flag, c compose, / search, ? help)
 - [ ] Swipe actions on thread list (archive, delete, snooze)
 - [x] Unread count badge in sidebar per mailbox
 - [x] Bulk thread selection (checkboxes + shift-select range)

@@ -120,17 +120,6 @@
   background: var(--color-bg);
 }
 
-.generating {
-  position: absolute;
-  top: 8px;
-  left: 12px;
-  right: 12px;
-  color: var(--color-accent);
-  font-size: 12px;
-  pointer-events: none;
-  z-index: 1;
-}
-
 .textarea {
   position: absolute;
   inset: 0;
@@ -164,18 +153,6 @@
 }
 
 .footerRight { display: flex; gap: 8px; }
-
-.aiBtn {
-  background: none;
-  border: 1px solid var(--color-accent);
-  color: var(--color-accent);
-  border-radius: 6px;
-  padding: 6px 14px;
-  font-size: 12px;
-  cursor: pointer;
-}
-.aiBtn:hover { background: rgba(79, 142, 247, 0.1); }
-.aiBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .cancelBtn {
   background: none;
@@ -347,6 +324,7 @@
   word-break: break-word;
 }
 
+/* Default (accepted): original struck through, revised highlighted */
 .diffOld {
   text-decoration: line-through;
   color: var(--color-text-muted);
@@ -355,6 +333,19 @@
 .diffNew {
   color: var(--color-text);
   font-weight: 500;
+}
+
+/* Rejected: flip — original is kept (no strikethrough), revised is discarded */
+.diffRejected .diffOld {
+  text-decoration: none;
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.diffRejected .diffNew {
+  text-decoration: line-through;
+  color: var(--color-text-muted);
+  font-weight: normal;
 }
 
 .diffEmpty {
