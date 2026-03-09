@@ -119,6 +119,13 @@ pub struct Attachment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComposeAttachment {
+    pub filename: String,
+    pub content_type: String,
+    pub data_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComposeMessage {
     pub account_id: String,
     pub to: Vec<EmailAddress>,
@@ -129,4 +136,21 @@ pub struct ComposeMessage {
     pub body_html: Option<String>,
     pub in_reply_to: Option<String>,
     pub references: Option<Vec<String>>,
+    pub attachments: Option<Vec<ComposeAttachment>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Draft {
+    pub id: String,
+    pub account_id: Option<String>,
+    pub mode: String,
+    pub to_addrs: String,
+    pub cc_addrs: String,
+    pub bcc_addrs: String,
+    pub subject: String,
+    pub body_text: String,
+    pub body_html: Option<String>,
+    pub in_reply_to: Option<String>,
+    pub thread_id: Option<String>,
+    pub updated_at: i64,
 }

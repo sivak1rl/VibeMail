@@ -19,7 +19,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Detect and handle token revocation gracefully (re-prompt OAuth)
 
 ### UI/UX
-- [ ] Keyboard shortcuts (j/k navigation, r reply, a archive, e mark read)
+- [x] Keyboard shortcuts (j/k, r reply, a archive, e read, f flag, c compose, / search, ? help)
 - [ ] Swipe actions on thread list (archive, delete, snooze)
 - [x] Unread count badge in sidebar per mailbox
 - [x] Bulk thread selection (checkboxes + shift-select range)
@@ -38,10 +38,10 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [x] Global error boundaries (catch and report crashes)
 
 ### Compose
-- [ ] Rich text editor (bold, italic, links, lists)
+- [x] Rich text editor (Tiptap — bold, italic, strike, bullet/ordered lists, blockquote, inline code)
 - [x] Reply/Reply All/Forward with quoted original message
-- [ ] Attachment upload via drag-and-drop
-- [ ] Draft auto-save to local DB
+- [x] Attachment upload via drag-and-drop (browse or drop, shown in list, sent as MIME attachments)
+- [x] Draft auto-save to local DB (2s debounce, restore on reopen, delete on send)
 - [x] CC/BCC fields
 - [x] Contact autocomplete from message history
 - [x] Signature configuration per account
@@ -67,9 +67,9 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Configurable summary length (brief / detailed)
 
 ### Smart Reply
-- [ ] AI-generated reply suggestions (3 options: brief, detailed, decline)
-- [ ] Tone selector: professional, casual, friendly
-- [ ] Context-aware: uses full thread history, not just last message
+- [x] AI-generated reply suggestions (3 options: brief, detailed, decline)
+- [x] Tone selector: professional, casual, friendly
+- [x] Context-aware: uses full thread history, not just last message
 - [x] "Edit and send" flow — AI drafts, user refines, then sends
 
 ### Triage & Priority

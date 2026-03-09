@@ -194,10 +194,10 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
           if (unlisten) unlisten();
           set({ syncing: false, syncProgress: null });
           
-          // Refresh the view — cap at 50 so we don't re-fetch the whole list
+          // Refresh the view — merge fresh page into existing list so scroll doesn't jump
           const PAGE = 50;
           const focusOnly = get().focusMode;
-          const threads = await invoke<Thread[]>("list_threads", {
+          const fresh = await invoke<Thread[]>("list_threads", {
             request: {
               account_id: accountId,
               mailbox_id: useMailboxStore.getState().selectedMailboxId,
@@ -206,7 +206,9 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
               focus_only: focusOnly,
             },
           });
-          set({ threads, hasMore: threads.length >= PAGE });
+          const freshIds = new Set(fresh.map((t) => t.id));
+          const tail = get().threads.filter((t) => !freshIds.has(t.id));
+          set({ threads: [...fresh, ...tail], hasMore: fresh.length >= PAGE });
         }
       };
 
@@ -317,7 +319,7 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
           
           const PAGE = 50;
           const focusOnly = get().focusMode;
-          const threads = await invoke<Thread[]>("list_threads", {
+          const fresh = await invoke<Thread[]>("list_threads", {
             request: {
               account_id: accountId,
               mailbox_id: mailboxId,
@@ -326,7 +328,9 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
               focus_only: focusOnly,
             },
           });
-          set({ threads, hasMore: threads.length >= PAGE });
+          const freshIds = new Set(fresh.map((t) => t.id));
+          const tail = get().threads.filter((t) => !freshIds.has(t.id));
+          set({ threads: [...fresh, ...tail], hasMore: fresh.length >= PAGE });
         }
       };
 

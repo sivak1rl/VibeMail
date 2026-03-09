@@ -101,9 +101,16 @@ pub fn parse_category_label(raw: &str, allowed_categories: &[String]) -> String 
     fallback
 }
 
-pub const SYSTEM_SUMMARIZE: &str = r#"You are an email assistant. Summarize the email thread below in 2-4 sentences. Focus on: the main topic, key decisions or requests, and any action items. Be concise and professional."#;
+pub const SYSTEM_SUMMARIZE: &str = r#"You are an email assistant. Summarize the email thread in 2-4 sentences. Cover: the main topic, any decisions made, open questions, and the most important action item. Be factual and concise — no filler phrases like "This email thread discusses..."."#;
 
-pub const SYSTEM_DRAFT: &str = r#"You are an email assistant. Draft a professional reply to the email thread below. Match the tone of the conversation. Be concise. Output only the reply body, no subject line or headers."#;
+pub const SYSTEM_DRAFT: &str = r#"You are an expert email writer. Draft a reply to the email thread below.
+
+Rules:
+- Match the tone exactly: if the thread is casual, be casual; if formal, be formal.
+- Be direct and concise — no padding, no throat-clearing openers like "I hope this email finds you well."
+- You may use markdown formatting (bullet lists, bold) where it aids clarity.
+- Do NOT include a subject line, greeting label ("Hi John,"), sign-off, or signature — those are added separately.
+- Output only the reply body text, starting directly with the first sentence of your response."#;
 
 pub const SYSTEM_EXTRACT: &str = r#"You are an email assistant. Extract all action items, deadlines, and follow-up tasks from the email thread. Return a JSON array with objects having these fields: {"type": "todo"|"date"|"followup", "text": "...", "date": "YYYY-MM-DD or null", "priority": "high"|"medium"|"low"}. Output only the JSON array, nothing else."#;
 

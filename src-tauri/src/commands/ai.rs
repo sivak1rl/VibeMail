@@ -166,6 +166,109 @@ pub async fn draft_reply(
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct SuggestRepliesRequest {
+    pub thread_id: String,
+    pub account_id: String,
+    pub tone: String, // "professional" | "casual" | "friendly"
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReplySuggestion {
+    pub label: String,
+    pub body: String,
+}
+
+#[tauri::command]
+pub async fn suggest_replies(
+    request: SuggestRepliesRequest,
+    db: State<'_, Arc<Mutex<Database>>>,
+    router: State<'_, Arc<AiRouter>>,
+) -> Result<Vec<ReplySuggestion>, String> {
+    let messages = {
+        let db = db.lock().await;
+        db.get_thread_messages(&request.thread_id)
+            .map_err(|e| e.to_string())?
+    };
+    if messages.is_empty() {
+        return Err("Thread not found".to_string());
+    }
+
+    let privacy = {
+        let db = db.lock().await;
+        db.get_ai_config().unwrap_or_default().privacy_mode
+    };
+
+    let tone_desc = match request.tone.as_str() {
+        "casual" => "casual and conversational — relaxed but still respectful",
+        "friendly" => "warm and friendly — enthusiastic, personable, encouraging",
+        _ => "professional — formal, concise, workplace-appropriate",
+    };
+
+    let system = format!(
+        r#"You are an expert email writer. Generate exactly 3 reply options in a {tone} tone.
+
+Return ONLY a JSON array — no markdown fences, no explanation, nothing before or after:
+[
+  {{"label": "Brief", "body": "..."}},
+  {{"label": "Detailed", "body": "..."}},
+  {{"label": "Decline", "body": "..."}}
+]
+
+Rules:
+- Brief: 2-4 sentences, directly addresses the key point
+- Detailed: thorough, covers all topics raised, may use bullet points
+- Decline: politely declines or pushes back; offers an alternative where sensible
+- All three: {tone} tone ({tone_desc})
+- body contains ONLY the reply text — no greeting, no sign-off, no subject line"#,
+        tone = request.tone,
+        tone_desc = tone_desc,
+    );
+
+    // Use the full thread history for context (up to 6000 chars)
+    let context = build_thread_context(&messages, 6000, privacy);
+    let chat_messages = vec![
+        ChatMessage {
+            role: "system".into(),
+            content: system,
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: format!("Email thread to reply to:\n\n{}", context),
+        },
+    ];
+
+    let raw = router
+        .complete(TaskKind::Draft, chat_messages)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Robustly extract JSON array from response
+    let json_start = raw.find('[').unwrap_or(0);
+    let json_end = raw.rfind(']').map(|i| i + 1).unwrap_or(raw.len());
+    let json_str = &raw[json_start..json_end];
+
+    let value: serde_json::Value =
+        serde_json::from_str(json_str).unwrap_or(serde_json::Value::Array(vec![]));
+    let arr = value.as_array().cloned().unwrap_or_default();
+
+    let suggestions = arr
+        .iter()
+        .filter_map(|item| {
+            let label = item["label"].as_str()?.to_string();
+            let body = item["body"].as_str()?.to_string();
+            if body.is_empty() { return None; }
+            Some(ReplySuggestion { label, body })
+        })
+        .collect::<Vec<_>>();
+
+    if suggestions.is_empty() {
+        return Err("AI did not return any suggestions — try again".to_string());
+    }
+
+    Ok(suggestions)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DraftNewRequest {
     pub prompt: String,
 }
@@ -179,7 +282,7 @@ pub async fn draft_new(
     let chat_messages = vec![
         ChatMessage {
             role: "system".into(),
-            content: "You are an email writing assistant. Write a clear, professional email body based on the user's description. Output only the email body — no subject line, no greeting label, no metadata. Start directly with the content.".into(),
+            content: "You are an expert email writer. Write a clear email body based on the user's description.\n\nRules:\n- Be concise and direct — no filler phrases or unnecessary padding.\n- You may use markdown formatting (bullet lists, bold) where it aids clarity.\n- Do NOT include a subject line, greeting (\"Hi X,\"), sign-off, or signature — those are handled separately.\n- Infer the appropriate tone from the description: professional for business topics, casual for informal ones.\n- Output only the email body, starting directly with the first sentence.".into(),
         },
         ChatMessage {
             role: "user".into(),
@@ -211,7 +314,7 @@ pub async fn proofread_text(
     let chat_messages = vec![
         ChatMessage {
             role: "system".into(),
-            content: "You are a proofreader. Fix grammar, spelling, punctuation, and clarity in the provided text. Preserve the original meaning and tone. Return only the corrected text with no commentary or explanation.".into(),
+            content: "You are a precise proofreader. Fix only clear errors: grammar, spelling, punctuation, and obvious clarity issues. Do not restructure sentences, change the author's style, or alter meaning. Preserve markdown formatting (bold, italics, lists) exactly as written. Return only the corrected text — no commentary, no explanation, no preamble.".into(),
         },
         ChatMessage {
             role: "user".into(),

@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import DOMPurify from "dompurify";
 import type { Message, Thread } from "../../stores/threads";
 import { useThreadStore } from "../../stores/threads";
 import { useAccountStore } from "../../stores/accounts";
 import { useAiStore } from "../../stores/ai";
 import { usePreferencesStore } from "../../stores/preferences";
+import { useDraftStore } from "../../stores/drafts";
 import styles from "./Compose.module.css";
 
 export type ComposeMode = "new" | "reply" | "replyAll" | "forward";
@@ -82,6 +86,135 @@ function computeDiff(original: string, revised: string): DiffChunk[] {
 
 function reconstructFromChunks(chunks: DiffChunk[]): string {
   return chunks.map((c) => (c.type === "equal" ? c.text : c.accepted ? c.revised : c.original)).join("");
+}
+
+// ── File helpers ──────────────────────────────────────────────────────────────
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ── Markdown → Tiptap HTML converter ─────────────────────────────────────────
+
+/** Convert plain-text with markdown-ish syntax to HTML suitable for Tiptap. */
+function bodyToHtml(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let inUl = false;
+  let inOl = false;
+
+  const closeList = () => {
+    if (inUl) { out.push("</ul>"); inUl = false; }
+    if (inOl) { out.push("</ol>"); inOl = false; }
+  };
+
+  for (const raw of lines) {
+    // Blockquote
+    if (raw.startsWith("> ") || raw === ">") {
+      closeList();
+      const inner = inlineMarkdown(raw.replace(/^>\s?/, ""));
+      out.push(`<blockquote><p>${inner}</p></blockquote>`);
+      continue;
+    }
+    // Unordered list
+    const ulMatch = raw.match(/^[-*]\s+(.*)/);
+    if (ulMatch) {
+      if (inOl) closeList();
+      if (!inUl) { out.push("<ul>"); inUl = true; }
+      out.push(`<li>${inlineMarkdown(ulMatch[1])}</li>`);
+      continue;
+    }
+    // Ordered list
+    const olMatch = raw.match(/^\d+\.\s+(.*)/);
+    if (olMatch) {
+      if (inUl) closeList();
+      if (!inOl) { out.push("<ol>"); inOl = true; }
+      out.push(`<li>${inlineMarkdown(olMatch[1])}</li>`);
+      continue;
+    }
+    closeList();
+    out.push(`<p>${inlineMarkdown(raw) || "<br>"}</p>`);
+  }
+  closeList();
+  return out.join("");
+}
+
+function inlineMarkdown(s: string): string {
+  return s
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/~~(.*?)~~/g, "<s>$1</s>")
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>")
+    .replace(/`(.*?)`/g, "<code>$1</code>");
+}
+
+/** Return blockquote nodes as an HTML string (to re-append after suggestion insert). */
+function getQuotedHtml(html: string): string {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  const parts: string[] = [];
+  div.querySelectorAll("blockquote").forEach((bq) => parts.push(bq.outerHTML));
+  return parts.join("");
+}
+
+/** Extract only the non-blockquote text from Tiptap HTML as plain text. */
+function getNonQuotedText(html: string): string {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  // Remove blockquote nodes
+  div.querySelectorAll("blockquote").forEach((bq) => bq.remove());
+  return div.innerText.trim();
+}
+
+/** Extract blockquote nodes as "> " prefixed plain text. */
+function getQuotedText(html: string): string {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  const quotes: string[] = [];
+  div.querySelectorAll("blockquote").forEach((bq) => {
+    bq.innerText.split("\n").forEach((line) => quotes.push(`> ${line}`));
+  });
+  return quotes.join("\n");
+}
+
+// ── Formatting toolbar ────────────────────────────────────────────────────────
+
+function FormattingToolbar({ editor }: { editor: import("@tiptap/react").Editor | null }) {
+  if (!editor) return null;
+  const btn = (label: string, title: string, active: boolean, onClick: () => void) => (
+    <button
+      key={title}
+      className={`${styles.toolbarBtn} ${active ? styles.toolbarBtnActive : ""}`}
+      onMouseDown={(e) => { e.preventDefault(); onClick(); }}
+      title={title}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className={styles.toolbar}>
+      {btn("B", "Bold", editor.isActive("bold"), () => editor.chain().focus().toggleBold().run())}
+      {btn("I", "Italic", editor.isActive("italic"), () => editor.chain().focus().toggleItalic().run())}
+      {btn("S", "Strikethrough", editor.isActive("strike"), () => editor.chain().focus().toggleStrike().run())}
+      <div className={styles.toolbarDivider} />
+      {btn("•", "Bullet list", editor.isActive("bulletList"), () => editor.chain().focus().toggleBulletList().run())}
+      {btn("1.", "Ordered list", editor.isActive("orderedList"), () => editor.chain().focus().toggleOrderedList().run())}
+      {btn("❝", "Blockquote", editor.isActive("blockquote"), () => editor.chain().focus().toggleBlockquote().run())}
+      <div className={styles.toolbarDivider} />
+      {btn("< >", "Code", editor.isActive("code"), () => editor.chain().focus().toggleCode().run())}
+    </div>
+  );
 }
 
 // ── ProofreadReview component ─────────────────────────────────────────────────
@@ -256,6 +389,7 @@ export default function Compose({
   const { activeAccountId, accounts } = useAccountStore();
   const { draftByThread, draftStreaming, draftReply, draftNew, config } = useAiStore();
   const { signatures } = usePreferencesStore();
+  const { saveDraft, loadDraft, deleteDraft } = useDraftStore();
   const contacts = useContacts();
 
   const mode: ComposeMode = modeProp ?? (thread ? "reply" : "new");
@@ -310,43 +444,153 @@ export default function Compose({
   const [aiError, setAiError] = useState<string | null>(null);
   const [proofreading, setProofreading] = useState(false);
   const [proofreadError, setProofreadError] = useState<string | null>(null);
+  const [proofreadInfo, setProofreadInfo] = useState<string | null>(null);
   const [proofreadChunks, setProofreadChunks] = useState<DiffChunk[] | null>(null);
   const [proofreadQuoted, setProofreadQuoted] = useState("");
+  const [justInserted, setJustInserted] = useState(false);
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [draftSaved, setDraftSaved] = useState(false);
+  const [tone, setTone] = useState<"professional" | "casual" | "friendly">("professional");
+  const [suggestions, setSuggestions] = useState<{ label: string; body: string }[] | null>(null);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
   // Which draft key is streaming/displayed in the AI panel
   const [activeDraftKey, setActiveDraftKey] = useState(mode !== "new" && thread ? thread.id : NEW_KEY);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Stable draft ID for this compose session
+  const draftId = mode === "new" ? "draft_new" : `draft_${mode}_${thread?.id ?? ""}`;
+
+
   const insertAt = useRef<number>(0);
   const prevStreaming = useRef(false);
+  const suppressBodyUpdate = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingDraftRef = useRef<{ bodyHtml: string | null } | null>(null);
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const draft = draftByThread[activeDraftKey];
   const isGenerating = draftStreaming[activeDraftKey] ?? false;
+
+  const editor = useEditor({
+    extensions: [StarterKit],
+    content: bodyToHtml(body),
+    onUpdate: ({ editor: ed }) => {
+      if (suppressBodyUpdate.current) return;
+      setBody(ed.getText({ blockSeparator: "\n" }));
+    },
+  });
 
   // When generation finishes, insert the completed draft at the recorded cursor position.
   useEffect(() => {
     const wasGenerating = prevStreaming.current;
     prevStreaming.current = isGenerating;
-    if (wasGenerating && !isGenerating && draft) {
+    if (wasGenerating && !isGenerating && draft && editor) {
+      suppressBodyUpdate.current = true;
       const pos = insertAt.current;
-      setBody((prev) => {
-        const before = prev.slice(0, pos);
-        const after = prev.slice(pos);
-        const sep = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
-        return before + sep + draft + after;
-      });
-      requestAnimationFrame(() => textareaRef.current?.focus());
+      editor.chain().focus().setTextSelection(pos).insertContent(bodyToHtml(draft)).run();
+      setBody(editor.getText({ blockSeparator: "\n" }));
+      suppressBodyUpdate.current = false;
+      setJustInserted(true);
+      setTimeout(() => setJustInserted(false), 2500);
     }
-  }, [draft, isGenerating]);
+  }, [draft, isGenerating, editor]);
+
+  // Load draft on mount
+  useEffect(() => {
+    void (async () => {
+      const d = await loadDraft(draftId);
+      if (!d) return;
+      setTo(d.to_addrs);
+      setCc(d.cc_addrs);
+      setBcc(d.bcc_addrs);
+      setSubject(d.subject);
+      setBody(d.body_text);
+      if (d.cc_addrs) setShowCc(true);
+      if (d.bcc_addrs) setShowBcc(true);
+      if (editor) {
+        suppressBodyUpdate.current = true;
+        editor.commands.setContent(d.body_html ?? bodyToHtml(d.body_text));
+        suppressBodyUpdate.current = false;
+      } else {
+        pendingDraftRef.current = { bodyHtml: d.body_html ?? bodyToHtml(d.body_text) };
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // only on mount
+
+  // Apply pending draft when editor becomes ready
+  useEffect(() => {
+    if (!editor || !pendingDraftRef.current) return;
+    suppressBodyUpdate.current = true;
+    editor.commands.setContent(pendingDraftRef.current.bodyHtml ?? "");
+    suppressBodyUpdate.current = false;
+    pendingDraftRef.current = null;
+  }, [editor]);
+
+  // Auto-save draft with 2s debounce
+  useEffect(() => {
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    draftSaveTimer.current = setTimeout(() => {
+      setDraftSaved(false);
+      void saveDraft(draftId, {
+        account_id: activeAccountId ?? null,
+        mode,
+        to_addrs: to,
+        cc_addrs: cc,
+        bcc_addrs: bcc,
+        subject,
+        body_text: body,
+        body_html: editor ? DOMPurify.sanitize(editor.getHTML()) : null,
+        in_reply_to: isReplyMode ? (lastMsg?.message_id ?? null) : null,
+        thread_id: thread?.id ?? null,
+      }).then(() => setDraftSaved(true));
+    }, 2000);
+    return () => { if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [to, cc, bcc, subject, body]);
 
   // Live preview body while reviewing proofread changes
   const bodyDisplay = proofreadChunks
     ? reconstructFromChunks(proofreadChunks) + (proofreadQuoted ? "\n" + proofreadQuoted : "")
     : body;
 
+  const handleSuggestReplies = async () => {
+    if (!thread || !activeAccountId) return;
+    setSuggestError(null);
+    setSuggestions(null);
+    setLoadingSuggestions(true);
+    try {
+      const result = await invoke<{ label: string; body: string }[]>("suggest_replies", {
+        request: { thread_id: thread.id, account_id: activeAccountId, tone },
+      });
+      setSuggestions(result);
+    } catch (e) {
+      setSuggestError(String(e));
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const handleUseSuggestion = (suggBody: string) => {
+    setSuggestions(null);
+    if (!editor) {
+      setBody(suggBody);
+      return;
+    }
+    const quotedHtml = getQuotedHtml(editor.getHTML());
+    suppressBodyUpdate.current = true;
+    editor.commands.setContent(bodyToHtml(suggBody) + quotedHtml);
+    setBody(suggBody);
+    suppressBodyUpdate.current = false;
+    setJustInserted(true);
+    setTimeout(() => setJustInserted(false), 2500);
+  };
+
   const handleReplyAIDraft = async () => {
     if (!thread) return;
     setAiError(null);
-    insertAt.current = textareaRef.current?.selectionStart ?? body.length;
+    insertAt.current = editor?.state.selection.anchor ?? 0;
     setActiveDraftKey(thread.id);
     try {
       await draftReply(thread.id);
@@ -358,7 +602,7 @@ export default function Compose({
   const handleCustomGenerate = async () => {
     if (!aiPrompt.trim()) return;
     setAiError(null);
-    insertAt.current = textareaRef.current?.selectionStart ?? body.length;
+    insertAt.current = editor?.state.selection.anchor ?? 0;
     setActiveDraftKey(NEW_KEY);
     try {
       await draftNew(aiPrompt.trim());
@@ -369,17 +613,17 @@ export default function Compose({
 
   const handleProofread = async () => {
     setProofreadError(null);
-    const lines = body.split("\n");
-    const firstQuoteIdx = lines.findIndex((l) => l.startsWith(">"));
-    const nonQuoted = firstQuoteIdx === -1 ? body : lines.slice(0, firstQuoteIdx).join("\n");
-    const quoted = firstQuoteIdx === -1 ? "" : lines.slice(firstQuoteIdx).join("\n");
+    setProofreadInfo(null);
+    const html = editor ? editor.getHTML() : bodyToHtml(body);
+    const nonQuoted = getNonQuotedText(html);
+    const quoted = getQuotedText(html);
     if (!nonQuoted.trim()) return;
     setProofreading(true);
     try {
       const result = await invoke<string>("proofread_text", { request: { text: nonQuoted } });
       const chunks = computeDiff(nonQuoted, result);
       if (!chunks.some((c) => c.type === "change")) {
-        setProofreadError("No changes suggested — looks good!");
+        setProofreadInfo("Looks good — no changes suggested.");
         return;
       }
       setProofreadQuoted(quoted);
@@ -400,7 +644,13 @@ export default function Compose({
   const applyProofread = () => {
     if (!proofreadChunks) return;
     const applied = reconstructFromChunks(proofreadChunks);
-    setBody(proofreadQuoted ? applied + "\n" + proofreadQuoted : applied);
+    const full = proofreadQuoted ? applied + "\n" + proofreadQuoted : applied;
+    setBody(full);
+    if (editor) {
+      suppressBodyUpdate.current = true;
+      editor.commands.setContent(bodyToHtml(full));
+      suppressBodyUpdate.current = false;
+    }
     setProofreadChunks(null);
     setProofreadQuoted("");
   };
@@ -415,7 +665,13 @@ export default function Compose({
     setSending(true);
     setError(null);
     try {
-      const isReplyMode = mode === "reply" || mode === "replyAll";
+      const attachmentData = await Promise.all(
+        attachments.map(async (file) => ({
+          filename: file.name,
+          content_type: file.type || "application/octet-stream",
+          data_base64: await fileToBase64(file),
+        })),
+      );
       await invoke("send_message", {
         message: {
           account_id: activeAccountId,
@@ -424,17 +680,35 @@ export default function Compose({
           bcc: bcc.trim() ? parseAddrs(bcc) : null,
           subject,
           body_text: body,
-          body_html: null,
+          body_html: editor ? DOMPurify.sanitize(editor.getHTML()) : null,
           in_reply_to: isReplyMode ? (lastMsg?.message_id ?? null) : null,
           references: isReplyMode && lastMsg ? [lastMsg.message_id].filter(Boolean) : null,
+          attachments: attachmentData.length > 0 ? attachmentData : null,
         },
       });
+      void deleteDraft(draftId);
       onClose();
     } catch (e) {
       setError(String(e));
     } finally {
       setSending(false);
     }
+  };
+
+  const addFiles = (files: FileList | null) => {
+    if (!files) return;
+    setAttachments((prev) => [...prev, ...Array.from(files)]);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+  const handleDragLeave = () => setIsDragOver(false);
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    addFiles(e.dataTransfer.files);
   };
 
   const headerTitle = { new: "New Message", reply: "Reply", replyAll: "Reply All", forward: "Forward" }[mode];
@@ -488,23 +762,65 @@ export default function Compose({
             )}
           </div>
 
-          <div className={styles.bodyArea}>
-            <textarea
-              ref={textareaRef}
-              className={styles.textarea}
-              value={bodyDisplay}
-              onChange={(e) => { if (!proofreadChunks) setBody(e.target.value); }}
-              disabled={sending || !!proofreadChunks}
-              placeholder={isReplyMode ? "Write your reply..." : "Write your message..."}
-            />
+          <FormattingToolbar editor={proofreadChunks ? null : editor} />
+
+          <div
+            className={styles.bodyArea}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            {proofreadChunks ? (
+              <textarea
+                className={styles.textarea}
+                value={bodyDisplay}
+                readOnly
+              />
+            ) : (
+              <div className={styles.editorContent}>
+                <EditorContent editor={editor} />
+              </div>
+            )}
+            {isDragOver && (
+              <div className={styles.dropOverlay}>Drop files to attach</div>
+            )}
           </div>
+
+          {attachments.length > 0 && (
+            <div className={styles.attachList}>
+              {attachments.map((f, i) => (
+                <div key={i} className={styles.attachItem}>
+                  <span className={styles.attachName}>📎 {f.name}</span>
+                  <span className={styles.attachSize}>{formatBytes(f.size)}</span>
+                  <button
+                    className={styles.attachRemove}
+                    onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                    title="Remove attachment"
+                  >✕</button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {error && <div className={styles.error}>{error}</div>}
 
           <div className={styles.footer}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => addFiles(e.target.files)}
+              />
+              <button className={styles.attachBtn} onClick={() => fileInputRef.current?.click()} disabled={sending}>
+                📎 Attach
+              </button>
+              {draftSaved && <span className={styles.draftSaved}>Draft saved</span>}
+            </div>
             <div className={styles.footerRight}>
               <button className={styles.cancelBtn} onClick={onClose} disabled={sending}>Cancel</button>
-              <button className={styles.sendBtn} onClick={handleSend} disabled={sending || !body.trim() || !to.trim()}>
+              <button className={styles.sendBtn} onClick={handleSend} disabled={sending || !!proofreadChunks || !body.trim() || !to.trim()}>
                 {sending ? "Sending..." : "Send"}
               </button>
             </div>
@@ -528,13 +844,60 @@ export default function Compose({
             ) : (
               <>
                 {isReplyMode && thread && (
-                  <button
-                    className={styles.aiGenerateBtn}
-                    onClick={handleReplyAIDraft}
-                    disabled={isGenerating || proofreading}
-                  >
-                    {isGenerating && activeDraftKey === thread.id ? "Drafting..." : "✦ Draft Reply"}
-                  </button>
+                  <>
+                    {/* Tone selector */}
+                    <div className={styles.toneSelector}>
+                      {(["professional", "casual", "friendly"] as const).map((t) => (
+                        <button
+                          key={t}
+                          className={`${styles.toneBtn} ${tone === t ? styles.toneBtnActive : ""}`}
+                          onClick={() => { setTone(t); setSuggestions(null); }}
+                        >
+                          {t.charAt(0).toUpperCase() + t.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Suggest replies */}
+                    <button
+                      className={styles.aiGenerateBtn}
+                      onClick={handleSuggestReplies}
+                      disabled={isGenerating || proofreading || loadingSuggestions}
+                    >
+                      {loadingSuggestions ? "Thinking..." : "✦ Suggest Replies"}
+                    </button>
+
+                    {/* Suggestion cards */}
+                    {suggestions && (
+                      <div className={styles.suggestionsList}>
+                        {suggestions.map((s) => (
+                          <div
+                            key={s.label}
+                            className={styles.suggestionCard}
+                            onClick={() => handleUseSuggestion(s.body)}
+                            title="Click to use this reply"
+                          >
+                            <div className={styles.suggestionLabel}>{s.label}</div>
+                            <div className={styles.suggestionBody}>{s.body}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {suggestError && <div className={styles.error}>{suggestError}</div>}
+
+                    {/* Divider */}
+                    <div className={styles.toolbarDivider} style={{ width: "100%", height: 1, margin: "2px 0" }} />
+
+                    {/* Draft reply (full stream into editor) */}
+                    <button
+                      className={styles.aiProofreadBtn}
+                      onClick={handleReplyAIDraft}
+                      disabled={isGenerating || proofreading || loadingSuggestions}
+                    >
+                      {isGenerating && activeDraftKey === thread.id ? "Drafting..." : "✦ Draft Full Reply"}
+                    </button>
+                  </>
                 )}
 
                 <p className={styles.aiPanelHint}>
@@ -578,7 +941,10 @@ export default function Compose({
                   <div className={styles.error}>{aiError ?? proofreadError}</div>
                 )}
 
-                {!isGenerating && !proofreading && draft && (
+                {proofreadInfo && (
+                  <p className={styles.aiInsertedHint}>{proofreadInfo}</p>
+                )}
+                {justInserted && (
                   <p className={styles.aiInsertedHint}>↑ Inserted at cursor</p>
                 )}
               </>

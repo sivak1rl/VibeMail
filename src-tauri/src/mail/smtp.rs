@@ -1,8 +1,9 @@
 use crate::auth::{keychain, oauth};
 use crate::db::models::{Account, ComposeMessage};
 use anyhow::{anyhow, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use lettre::{
-    message::{header::ContentType, Mailbox, MultiPart, SinglePart},
+    message::{header::ContentType, Attachment, Mailbox, MultiPart, SinglePart},
     transport::smtp::authentication::{Credentials, Mechanism},
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
@@ -41,22 +42,43 @@ pub async fn send_message(account: &Account, compose: &ComposeMessage) -> Result
         builder = builder.in_reply_to(irt.parse()?);
     }
 
-    let email = if let Some(html) = &compose.body_html {
-        builder.multipart(
-            MultiPart::alternative()
-                .singlepart(
-                    SinglePart::builder()
-                        .header(ContentType::TEXT_PLAIN)
-                        .body(compose.body_text.clone()),
-                )
-                .singlepart(
-                    SinglePart::builder()
-                        .header(ContentType::TEXT_HTML)
-                        .body(html.clone()),
-                ),
-        )?
+    let body_part: MultiPart = if let Some(html) = &compose.body_html {
+        MultiPart::alternative()
+            .singlepart(
+                SinglePart::builder()
+                    .header(ContentType::TEXT_PLAIN)
+                    .body(compose.body_text.clone()),
+            )
+            .singlepart(
+                SinglePart::builder()
+                    .header(ContentType::TEXT_HTML)
+                    .body(html.clone()),
+            )
     } else {
-        builder.body(compose.body_text.clone())?
+        MultiPart::alternative().singlepart(
+            SinglePart::builder()
+                .header(ContentType::TEXT_PLAIN)
+                .body(compose.body_text.clone()),
+        )
+    };
+
+    let attachments = compose.attachments.as_deref().unwrap_or(&[]);
+    let email = if attachments.is_empty() {
+        builder.multipart(body_part)?
+    } else {
+        let mut mixed = MultiPart::mixed().multipart(body_part);
+        for attach in attachments {
+            let data = STANDARD
+                .decode(&attach.data_base64)
+                .map_err(|e| anyhow!("base64 decode error: {}", e))?;
+            let ct: ContentType = attach
+                .content_type
+                .parse()
+                .unwrap_or_else(|_| "application/octet-stream".parse().unwrap());
+            let part = Attachment::new(attach.filename.clone()).body(data, ct);
+            mixed = mixed.singlepart(part);
+        }
+        builder.multipart(mixed)?
     };
 
     let mailer = build_transport(account).await?;

@@ -361,9 +361,18 @@ vibemail/
 - `tantivy` v0.22 — Full-text search
 - `serde_json` — JSON serialization
 
-## License
+## License & Trademarks
 
-[Choose: MIT, Apache 2.0, GPL-3.0, etc.]
+This project is dual-licensed under the MIT and Apache 2.0 licenses.
+
+### Trademarks
+
+VibeMail™ and the VibeMail logo are trademarks of Rich Sivak. While the code is open-source, I want to keep the VibeMail brand recognizable.
+
+If you fork this project:
+- You ARE allowed to keep the name VibeMail in your fork (e.g., VibeMail-Community or [YourName]’s VibeMail).
+- You MUST provide attribution and a link back to this original repository.
+- Please do not use the name in a way that suggests I officially endorse your version.
 
 ## Contributing
 

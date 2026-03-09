@@ -170,6 +170,22 @@ CREATE TABLE IF NOT EXISTS thread_embeddings (
 
 CREATE INDEX IF NOT EXISTS idx_embeddings_model ON thread_embeddings(model);
 
+CREATE TABLE IF NOT EXISTS drafts (
+    id          TEXT PRIMARY KEY,
+    account_id  TEXT,
+    mode        TEXT NOT NULL DEFAULT 'new',
+    to_addrs    TEXT NOT NULL DEFAULT '',
+    cc_addrs    TEXT NOT NULL DEFAULT '',
+    bcc_addrs   TEXT NOT NULL DEFAULT '',
+    subject     TEXT NOT NULL DEFAULT '',
+    body_text   TEXT NOT NULL DEFAULT '',
+    body_html   TEXT,
+    in_reply_to TEXT,
+    thread_id   TEXT,
+    created_at  INTEGER NOT NULL DEFAULT (unixepoch()),
+    updated_at  INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
 -- Full-text search
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     subject,
