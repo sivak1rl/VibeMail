@@ -8,6 +8,7 @@ import { useThreadStore } from "../../stores/threads";
 import { useAccountStore } from "../../stores/accounts";
 import { useAiStore } from "../../stores/ai";
 import { usePreferencesStore } from "../../stores/preferences";
+import { useDraftStore } from "../../stores/drafts";
 import styles from "./Compose.module.css";
 
 export type ComposeMode = "new" | "reply" | "replyAll" | "forward";
@@ -85,6 +86,23 @@ function computeDiff(original: string, revised: string): DiffChunk[] {
 
 function reconstructFromChunks(chunks: DiffChunk[]): string {
   return chunks.map((c) => (c.type === "equal" ? c.text : c.accepted ? c.revised : c.original)).join("");
+}
+
+// ── File helpers ──────────────────────────────────────────────────────────────
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // ── Markdown → Tiptap HTML converter ─────────────────────────────────────────
@@ -362,6 +380,7 @@ export default function Compose({
   const { activeAccountId, accounts } = useAccountStore();
   const { draftByThread, draftStreaming, draftReply, draftNew, config } = useAiStore();
   const { signatures } = usePreferencesStore();
+  const { saveDraft, loadDraft, deleteDraft } = useDraftStore();
   const contacts = useContacts();
 
   const mode: ComposeMode = modeProp ?? (thread ? "reply" : "new");
@@ -420,12 +439,22 @@ export default function Compose({
   const [proofreadChunks, setProofreadChunks] = useState<DiffChunk[] | null>(null);
   const [proofreadQuoted, setProofreadQuoted] = useState("");
   const [justInserted, setJustInserted] = useState(false);
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [draftSaved, setDraftSaved] = useState(false);
   // Which draft key is streaming/displayed in the AI panel
   const [activeDraftKey, setActiveDraftKey] = useState(mode !== "new" && thread ? thread.id : NEW_KEY);
+
+  // Stable draft ID for this compose session
+  const draftId = mode === "new" ? "draft_new" : `draft_${mode}_${thread?.id ?? ""}`;
+
 
   const insertAt = useRef<number>(0);
   const prevStreaming = useRef(false);
   const suppressBodyUpdate = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingDraftRef = useRef<{ bodyHtml: string | null } | null>(null);
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const draft = draftByThread[activeDraftKey];
   const isGenerating = draftStreaming[activeDraftKey] ?? false;
@@ -453,6 +482,60 @@ export default function Compose({
       setTimeout(() => setJustInserted(false), 2500);
     }
   }, [draft, isGenerating, editor]);
+
+  // Load draft on mount
+  useEffect(() => {
+    void (async () => {
+      const d = await loadDraft(draftId);
+      if (!d) return;
+      setTo(d.to_addrs);
+      setCc(d.cc_addrs);
+      setBcc(d.bcc_addrs);
+      setSubject(d.subject);
+      setBody(d.body_text);
+      if (d.cc_addrs) setShowCc(true);
+      if (d.bcc_addrs) setShowBcc(true);
+      if (editor) {
+        suppressBodyUpdate.current = true;
+        editor.commands.setContent(d.body_html ?? bodyToHtml(d.body_text));
+        suppressBodyUpdate.current = false;
+      } else {
+        pendingDraftRef.current = { bodyHtml: d.body_html ?? bodyToHtml(d.body_text) };
+      }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // only on mount
+
+  // Apply pending draft when editor becomes ready
+  useEffect(() => {
+    if (!editor || !pendingDraftRef.current) return;
+    suppressBodyUpdate.current = true;
+    editor.commands.setContent(pendingDraftRef.current.bodyHtml ?? "");
+    suppressBodyUpdate.current = false;
+    pendingDraftRef.current = null;
+  }, [editor]);
+
+  // Auto-save draft with 2s debounce
+  useEffect(() => {
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current);
+    draftSaveTimer.current = setTimeout(() => {
+      setDraftSaved(false);
+      void saveDraft(draftId, {
+        account_id: activeAccountId ?? null,
+        mode,
+        to_addrs: to,
+        cc_addrs: cc,
+        bcc_addrs: bcc,
+        subject,
+        body_text: body,
+        body_html: editor ? DOMPurify.sanitize(editor.getHTML()) : null,
+        in_reply_to: isReplyMode ? (lastMsg?.message_id ?? null) : null,
+        thread_id: thread?.id ?? null,
+      }).then(() => setDraftSaved(true));
+    }, 2000);
+    return () => { if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [to, cc, bcc, subject, body]);
 
   // Live preview body while reviewing proofread changes
   const bodyDisplay = proofreadChunks
@@ -537,7 +620,13 @@ export default function Compose({
     setSending(true);
     setError(null);
     try {
-      const isReplyMode = mode === "reply" || mode === "replyAll";
+      const attachmentData = await Promise.all(
+        attachments.map(async (file) => ({
+          filename: file.name,
+          content_type: file.type || "application/octet-stream",
+          data_base64: await fileToBase64(file),
+        })),
+      );
       await invoke("send_message", {
         message: {
           account_id: activeAccountId,
@@ -549,14 +638,32 @@ export default function Compose({
           body_html: editor ? DOMPurify.sanitize(editor.getHTML()) : null,
           in_reply_to: isReplyMode ? (lastMsg?.message_id ?? null) : null,
           references: isReplyMode && lastMsg ? [lastMsg.message_id].filter(Boolean) : null,
+          attachments: attachmentData.length > 0 ? attachmentData : null,
         },
       });
+      void deleteDraft(draftId);
       onClose();
     } catch (e) {
       setError(String(e));
     } finally {
       setSending(false);
     }
+  };
+
+  const addFiles = (files: FileList | null) => {
+    if (!files) return;
+    setAttachments((prev) => [...prev, ...Array.from(files)]);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  };
+  const handleDragLeave = () => setIsDragOver(false);
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    addFiles(e.dataTransfer.files);
   };
 
   const headerTitle = { new: "New Message", reply: "Reply", replyAll: "Reply All", forward: "Forward" }[mode];
@@ -612,7 +719,12 @@ export default function Compose({
 
           <FormattingToolbar editor={proofreadChunks ? null : editor} />
 
-          <div className={styles.bodyArea}>
+          <div
+            className={styles.bodyArea}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
             {proofreadChunks ? (
               <textarea
                 className={styles.textarea}
@@ -624,11 +736,43 @@ export default function Compose({
                 <EditorContent editor={editor} />
               </div>
             )}
+            {isDragOver && (
+              <div className={styles.dropOverlay}>Drop files to attach</div>
+            )}
           </div>
+
+          {attachments.length > 0 && (
+            <div className={styles.attachList}>
+              {attachments.map((f, i) => (
+                <div key={i} className={styles.attachItem}>
+                  <span className={styles.attachName}>📎 {f.name}</span>
+                  <span className={styles.attachSize}>{formatBytes(f.size)}</span>
+                  <button
+                    className={styles.attachRemove}
+                    onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))}
+                    title="Remove attachment"
+                  >✕</button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {error && <div className={styles.error}>{error}</div>}
 
           <div className={styles.footer}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => addFiles(e.target.files)}
+              />
+              <button className={styles.attachBtn} onClick={() => fileInputRef.current?.click()} disabled={sending}>
+                📎 Attach
+              </button>
+              {draftSaved && <span className={styles.draftSaved}>Draft saved</span>}
+            </div>
             <div className={styles.footerRight}>
               <button className={styles.cancelBtn} onClick={onClose} disabled={sending}>Cancel</button>
               <button className={styles.sendBtn} onClick={handleSend} disabled={sending || !!proofreadChunks || !body.trim() || !to.trim()}>

@@ -40,8 +40,8 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 ### Compose
 - [x] Rich text editor (Tiptap — bold, italic, strike, bullet/ordered lists, blockquote, inline code)
 - [x] Reply/Reply All/Forward with quoted original message
-- [ ] Attachment upload via drag-and-drop
-- [ ] Draft auto-save to local DB
+- [x] Attachment upload via drag-and-drop (browse or drop, shown in list, sent as MIME attachments)
+- [x] Draft auto-save to local DB (2s debounce, restore on reopen, delete on send)
 - [x] CC/BCC fields
 - [x] Contact autocomplete from message history
 - [x] Signature configuration per account

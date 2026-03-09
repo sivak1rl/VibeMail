@@ -999,6 +999,62 @@ impl Database {
         let end = (offset + limit).min(results.len());
         Ok(results[start..end].to_vec())
     }
+
+    // ── Draft auto-save ───────────────────────────────────────────────────────
+
+    pub fn save_draft(&self, draft: &Draft) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT INTO drafts (id, account_id, mode, to_addrs, cc_addrs, bcc_addrs, subject,
+                                   body_text, body_html, in_reply_to, thread_id, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, unixepoch())
+               ON CONFLICT(id) DO UPDATE SET
+                 account_id=excluded.account_id, mode=excluded.mode,
+                 to_addrs=excluded.to_addrs, cc_addrs=excluded.cc_addrs,
+                 bcc_addrs=excluded.bcc_addrs, subject=excluded.subject,
+                 body_text=excluded.body_text, body_html=excluded.body_html,
+                 in_reply_to=excluded.in_reply_to, thread_id=excluded.thread_id,
+                 updated_at=unixepoch()"#,
+            rusqlite::params![
+                draft.id, draft.account_id, draft.mode,
+                draft.to_addrs, draft.cc_addrs, draft.bcc_addrs,
+                draft.subject, draft.body_text, draft.body_html,
+                draft.in_reply_to, draft.thread_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_draft(&self, id: &str) -> Result<Option<Draft>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, account_id, mode, to_addrs, cc_addrs, bcc_addrs, subject,
+                      body_text, body_html, in_reply_to, thread_id, updated_at
+               FROM drafts WHERE id=?1"#,
+        )?;
+        let mut rows = stmt.query([id])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(Draft {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                mode: row.get(2)?,
+                to_addrs: row.get(3)?,
+                cc_addrs: row.get(4)?,
+                bcc_addrs: row.get(5)?,
+                subject: row.get(6)?,
+                body_text: row.get(7)?,
+                body_html: row.get(8)?,
+                in_reply_to: row.get(9)?,
+                thread_id: row.get(10)?,
+                updated_at: row.get(11)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn delete_draft(&self, id: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM drafts WHERE id=?1", [id])?;
+        Ok(())
+    }
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
