@@ -104,6 +104,8 @@ export default function InboxList({
   const [refreshing, setRefreshing] = useState(false);
   const startY = useRef(0);
   const selectedSet = useMemo(() => new Set(selectedThreadIds), [selectedThreadIds]);
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
   const scrollPositions = useRef<Map<string, number>>(new Map());
   const prevScrollKey = useRef<string>(scrollKey);
 
@@ -132,14 +134,14 @@ export default function InboxList({
     overscan: 8,
   });
 
-  // Scroll selected item into view when selectedId changes
+  // Scroll selected item into view when selectedId changes (not when threads append)
   useEffect(() => {
     if (!selectedId) return;
-    const idx = threads.findIndex((t) => t.id === selectedId);
+    const idx = threadsRef.current.findIndex((t) => t.id === selectedId);
     if (idx >= 0) {
       virtualizer.scrollToIndex(idx, { align: "auto" });
     }
-  }, [selectedId, threads, virtualizer]);
+  }, [selectedId, virtualizer]);
 
   // Trigger loadMore on scroll (catches both mouse wheel and keyboard End/PageDown)
   const handleScroll = useCallback(() => {
