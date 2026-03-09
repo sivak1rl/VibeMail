@@ -112,6 +112,39 @@
 }
 .autocompleteItem:hover { background: var(--color-surface2); }
 
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.toolbarBtn {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 3px 7px;
+  border-radius: 4px;
+  line-height: 1;
+  min-width: 26px;
+}
+.toolbarBtn:hover { background: var(--color-surface2); color: var(--color-text); }
+.toolbarBtnActive { background: var(--color-surface2); color: var(--color-accent); }
+
+.toolbarDivider {
+  width: 1px;
+  height: 16px;
+  background: var(--color-border);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+
 .bodyArea {
   flex: 1;
   position: relative;
@@ -119,6 +152,45 @@
   min-height: 140px;
   background: var(--color-bg);
 }
+
+.editorContent {
+  position: absolute;
+  inset: 0;
+  padding: 12px 16px;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* ProseMirror editor styles */
+:global(.ProseMirror) {
+  outline: none;
+  min-height: 100px;
+  color: var(--color-text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+:global(.ProseMirror p) { margin: 0 0 6px 0; }
+:global(.ProseMirror p:last-child) { margin-bottom: 0; }
+:global(.ProseMirror ul),
+:global(.ProseMirror ol) { padding-left: 20px; margin: 4px 0; }
+:global(.ProseMirror li) { margin: 2px 0; }
+:global(.ProseMirror blockquote) {
+  border-left: 3px solid var(--color-border);
+  margin: 4px 0;
+  padding-left: 12px;
+  color: var(--color-text-muted);
+}
+:global(.ProseMirror strong) { font-weight: 600; }
+:global(.ProseMirror em) { font-style: italic; }
+:global(.ProseMirror s) { text-decoration: line-through; }
+:global(.ProseMirror code) {
+  font-family: monospace;
+  font-size: 12px;
+  background: var(--color-surface2);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+:global(.ProseMirror-placeholder) { color: var(--color-text-muted); pointer-events: none; }
 
 .textarea {
   position: absolute;

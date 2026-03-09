@@ -38,7 +38,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [x] Global error boundaries (catch and report crashes)
 
 ### Compose
-- [ ] Rich text editor (bold, italic, links, lists)
+- [x] Rich text editor (Tiptap — bold, italic, strike, bullet/ordered lists, blockquote, inline code)
 - [x] Reply/Reply All/Forward with quoted original message
 - [ ] Attachment upload via drag-and-drop
 - [ ] Draft auto-save to local DB

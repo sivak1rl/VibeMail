@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useEditor, EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import DOMPurify from "dompurify";
 import type { Message, Thread } from "../../stores/threads";
 import { useThreadStore } from "../../stores/threads";
 import { useAccountStore } from "../../stores/accounts";
@@ -82,6 +85,109 @@ function computeDiff(original: string, revised: string): DiffChunk[] {
 
 function reconstructFromChunks(chunks: DiffChunk[]): string {
   return chunks.map((c) => (c.type === "equal" ? c.text : c.accepted ? c.revised : c.original)).join("");
+}
+
+// ── Markdown → Tiptap HTML converter ─────────────────────────────────────────
+
+/** Convert plain-text with markdown-ish syntax to HTML suitable for Tiptap. */
+function bodyToHtml(text: string): string {
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let inUl = false;
+  let inOl = false;
+
+  const closeList = () => {
+    if (inUl) { out.push("</ul>"); inUl = false; }
+    if (inOl) { out.push("</ol>"); inOl = false; }
+  };
+
+  for (const raw of lines) {
+    // Blockquote
+    if (raw.startsWith("> ") || raw === ">") {
+      closeList();
+      const inner = inlineMarkdown(raw.replace(/^>\s?/, ""));
+      out.push(`<blockquote><p>${inner}</p></blockquote>`);
+      continue;
+    }
+    // Unordered list
+    const ulMatch = raw.match(/^[-*]\s+(.*)/);
+    if (ulMatch) {
+      if (inOl) closeList();
+      if (!inUl) { out.push("<ul>"); inUl = true; }
+      out.push(`<li>${inlineMarkdown(ulMatch[1])}</li>`);
+      continue;
+    }
+    // Ordered list
+    const olMatch = raw.match(/^\d+\.\s+(.*)/);
+    if (olMatch) {
+      if (inUl) closeList();
+      if (!inOl) { out.push("<ol>"); inOl = true; }
+      out.push(`<li>${inlineMarkdown(olMatch[1])}</li>`);
+      continue;
+    }
+    closeList();
+    out.push(`<p>${inlineMarkdown(raw) || "<br>"}</p>`);
+  }
+  closeList();
+  return out.join("");
+}
+
+function inlineMarkdown(s: string): string {
+  return s
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/~~(.*?)~~/g, "<s>$1</s>")
+    .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*(.*?)\*/g, "<em>$1</em>")
+    .replace(/`(.*?)`/g, "<code>$1</code>");
+}
+
+/** Extract only the non-blockquote text from Tiptap HTML as plain text. */
+function getNonQuotedText(html: string): string {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  // Remove blockquote nodes
+  div.querySelectorAll("blockquote").forEach((bq) => bq.remove());
+  return div.innerText.trim();
+}
+
+/** Extract blockquote nodes as "> " prefixed plain text. */
+function getQuotedText(html: string): string {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  const quotes: string[] = [];
+  div.querySelectorAll("blockquote").forEach((bq) => {
+    bq.innerText.split("\n").forEach((line) => quotes.push(`> ${line}`));
+  });
+  return quotes.join("\n");
+}
+
+// ── Formatting toolbar ────────────────────────────────────────────────────────
+
+function FormattingToolbar({ editor }: { editor: import("@tiptap/react").Editor | null }) {
+  if (!editor) return null;
+  const btn = (label: string, title: string, active: boolean, onClick: () => void) => (
+    <button
+      key={title}
+      className={`${styles.toolbarBtn} ${active ? styles.toolbarBtnActive : ""}`}
+      onMouseDown={(e) => { e.preventDefault(); onClick(); }}
+      title={title}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className={styles.toolbar}>
+      {btn("B", "Bold", editor.isActive("bold"), () => editor.chain().focus().toggleBold().run())}
+      {btn("I", "Italic", editor.isActive("italic"), () => editor.chain().focus().toggleItalic().run())}
+      {btn("S", "Strikethrough", editor.isActive("strike"), () => editor.chain().focus().toggleStrike().run())}
+      <div className={styles.toolbarDivider} />
+      {btn("•", "Bullet list", editor.isActive("bulletList"), () => editor.chain().focus().toggleBulletList().run())}
+      {btn("1.", "Ordered list", editor.isActive("orderedList"), () => editor.chain().focus().toggleOrderedList().run())}
+      {btn("❝", "Blockquote", editor.isActive("blockquote"), () => editor.chain().focus().toggleBlockquote().run())}
+      <div className={styles.toolbarDivider} />
+      {btn("< >", "Code", editor.isActive("code"), () => editor.chain().focus().toggleCode().run())}
+    </div>
+  );
 }
 
 // ── ProofreadReview component ─────────────────────────────────────────────────
@@ -317,30 +423,36 @@ export default function Compose({
   // Which draft key is streaming/displayed in the AI panel
   const [activeDraftKey, setActiveDraftKey] = useState(mode !== "new" && thread ? thread.id : NEW_KEY);
 
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const insertAt = useRef<number>(0);
   const prevStreaming = useRef(false);
+  const suppressBodyUpdate = useRef(false);
 
   const draft = draftByThread[activeDraftKey];
   const isGenerating = draftStreaming[activeDraftKey] ?? false;
+
+  const editor = useEditor({
+    extensions: [StarterKit],
+    content: bodyToHtml(body),
+    onUpdate: ({ editor: ed }) => {
+      if (suppressBodyUpdate.current) return;
+      setBody(ed.getText({ blockSeparator: "\n" }));
+    },
+  });
 
   // When generation finishes, insert the completed draft at the recorded cursor position.
   useEffect(() => {
     const wasGenerating = prevStreaming.current;
     prevStreaming.current = isGenerating;
-    if (wasGenerating && !isGenerating && draft) {
+    if (wasGenerating && !isGenerating && draft && editor) {
+      suppressBodyUpdate.current = true;
       const pos = insertAt.current;
-      setBody((prev) => {
-        const before = prev.slice(0, pos);
-        const after = prev.slice(pos);
-        const sep = before.length > 0 && !before.endsWith("\n") ? "\n" : "";
-        return before + sep + draft + after;
-      });
+      editor.chain().focus().setTextSelection(pos).insertContent(bodyToHtml(draft)).run();
+      setBody(editor.getText({ blockSeparator: "\n" }));
+      suppressBodyUpdate.current = false;
       setJustInserted(true);
       setTimeout(() => setJustInserted(false), 2500);
-      requestAnimationFrame(() => textareaRef.current?.focus());
     }
-  }, [draft, isGenerating]);
+  }, [draft, isGenerating, editor]);
 
   // Live preview body while reviewing proofread changes
   const bodyDisplay = proofreadChunks
@@ -350,7 +462,7 @@ export default function Compose({
   const handleReplyAIDraft = async () => {
     if (!thread) return;
     setAiError(null);
-    insertAt.current = textareaRef.current?.selectionStart ?? body.length;
+    insertAt.current = editor?.state.selection.anchor ?? 0;
     setActiveDraftKey(thread.id);
     try {
       await draftReply(thread.id);
@@ -362,7 +474,7 @@ export default function Compose({
   const handleCustomGenerate = async () => {
     if (!aiPrompt.trim()) return;
     setAiError(null);
-    insertAt.current = textareaRef.current?.selectionStart ?? body.length;
+    insertAt.current = editor?.state.selection.anchor ?? 0;
     setActiveDraftKey(NEW_KEY);
     try {
       await draftNew(aiPrompt.trim());
@@ -374,10 +486,9 @@ export default function Compose({
   const handleProofread = async () => {
     setProofreadError(null);
     setProofreadInfo(null);
-    const lines = body.split("\n");
-    const firstQuoteIdx = lines.findIndex((l) => l.startsWith(">"));
-    const nonQuoted = firstQuoteIdx === -1 ? body : lines.slice(0, firstQuoteIdx).join("\n");
-    const quoted = firstQuoteIdx === -1 ? "" : lines.slice(firstQuoteIdx).join("\n");
+    const html = editor ? editor.getHTML() : bodyToHtml(body);
+    const nonQuoted = getNonQuotedText(html);
+    const quoted = getQuotedText(html);
     if (!nonQuoted.trim()) return;
     setProofreading(true);
     try {
@@ -405,7 +516,13 @@ export default function Compose({
   const applyProofread = () => {
     if (!proofreadChunks) return;
     const applied = reconstructFromChunks(proofreadChunks);
-    setBody(proofreadQuoted ? applied + "\n" + proofreadQuoted : applied);
+    const full = proofreadQuoted ? applied + "\n" + proofreadQuoted : applied;
+    setBody(full);
+    if (editor) {
+      suppressBodyUpdate.current = true;
+      editor.commands.setContent(bodyToHtml(full));
+      suppressBodyUpdate.current = false;
+    }
     setProofreadChunks(null);
     setProofreadQuoted("");
   };
@@ -429,7 +546,7 @@ export default function Compose({
           bcc: bcc.trim() ? parseAddrs(bcc) : null,
           subject,
           body_text: body,
-          body_html: null,
+          body_html: editor ? DOMPurify.sanitize(editor.getHTML()) : null,
           in_reply_to: isReplyMode ? (lastMsg?.message_id ?? null) : null,
           references: isReplyMode && lastMsg ? [lastMsg.message_id].filter(Boolean) : null,
         },
@@ -493,15 +610,20 @@ export default function Compose({
             )}
           </div>
 
+          <FormattingToolbar editor={proofreadChunks ? null : editor} />
+
           <div className={styles.bodyArea}>
-            <textarea
-              ref={textareaRef}
-              className={styles.textarea}
-              value={bodyDisplay}
-              onChange={(e) => { if (!proofreadChunks) setBody(e.target.value); }}
-              disabled={sending || !!proofreadChunks}
-              placeholder={isReplyMode ? "Write your reply..." : "Write your message..."}
-            />
+            {proofreadChunks ? (
+              <textarea
+                className={styles.textarea}
+                value={bodyDisplay}
+                readOnly
+              />
+            ) : (
+              <div className={styles.editorContent}>
+                <EditorContent editor={editor} />
+              </div>
+            )}
           </div>
 
           {error && <div className={styles.error}>{error}</div>}

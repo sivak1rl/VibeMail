@@ -179,7 +179,7 @@ pub async fn draft_new(
     let chat_messages = vec![
         ChatMessage {
             role: "system".into(),
-            content: "You are an email writing assistant. Write a clear, professional email body based on the user's description. Output only the email body — no subject line, no greeting label, no metadata. Start directly with the content.".into(),
+            content: "You are an expert email writer. Write a clear email body based on the user's description.\n\nRules:\n- Be concise and direct — no filler phrases or unnecessary padding.\n- You may use markdown formatting (bullet lists, bold) where it aids clarity.\n- Do NOT include a subject line, greeting (\"Hi X,\"), sign-off, or signature — those are handled separately.\n- Infer the appropriate tone from the description: professional for business topics, casual for informal ones.\n- Output only the email body, starting directly with the first sentence.".into(),
         },
         ChatMessage {
             role: "user".into(),
@@ -211,7 +211,7 @@ pub async fn proofread_text(
     let chat_messages = vec![
         ChatMessage {
             role: "system".into(),
-            content: "You are a proofreader. Fix grammar, spelling, punctuation, and clarity in the provided text. Preserve the original meaning and tone. Return only the corrected text with no commentary or explanation.".into(),
+            content: "You are a precise proofreader. Fix only clear errors: grammar, spelling, punctuation, and obvious clarity issues. Do not restructure sentences, change the author's style, or alter meaning. Preserve markdown formatting (bold, italics, lists) exactly as written. Return only the corrected text — no commentary, no explanation, no preamble.".into(),
         },
         ChatMessage {
             role: "user".into(),
