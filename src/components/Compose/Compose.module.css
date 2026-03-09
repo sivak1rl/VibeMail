@@ -405,6 +405,70 @@
   margin: 0;
 }
 
+/* Tone selector */
+.toneSelector {
+  display: flex;
+  gap: 4px;
+}
+
+.toneBtn {
+  flex: 1;
+  background: none;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: center;
+}
+.toneBtn:hover { border-color: var(--color-accent); color: var(--color-accent); }
+.toneBtnActive {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+/* Suggestion cards */
+.suggestionsList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.suggestionCard {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  background: var(--color-surface);
+  transition: border-color 0.1s;
+}
+.suggestionCard:hover {
+  border-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 6%, var(--color-surface));
+}
+
+.suggestionLabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.suggestionBody {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .aiStream {
   font-size: 11px;
   color: var(--color-text-muted);

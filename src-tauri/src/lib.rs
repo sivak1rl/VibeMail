@@ -93,6 +93,7 @@ pub fn run() {
             commands::drafts::save_draft,
             commands::drafts::get_draft,
             commands::drafts::delete_draft,
+            commands::ai::suggest_replies,
             commands::ai::summarize_thread,
             commands::ai::draft_reply,
             commands::ai::draft_new,

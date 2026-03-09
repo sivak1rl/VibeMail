@@ -159,6 +159,15 @@ function inlineMarkdown(s: string): string {
     .replace(/`(.*?)`/g, "<code>$1</code>");
 }
 
+/** Return blockquote nodes as an HTML string (to re-append after suggestion insert). */
+function getQuotedHtml(html: string): string {
+  const div = document.createElement("div");
+  div.innerHTML = html;
+  const parts: string[] = [];
+  div.querySelectorAll("blockquote").forEach((bq) => parts.push(bq.outerHTML));
+  return parts.join("");
+}
+
 /** Extract only the non-blockquote text from Tiptap HTML as plain text. */
 function getNonQuotedText(html: string): string {
   const div = document.createElement("div");
@@ -442,6 +451,10 @@ export default function Compose({
   const [attachments, setAttachments] = useState<File[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [draftSaved, setDraftSaved] = useState(false);
+  const [tone, setTone] = useState<"professional" | "casual" | "friendly">("professional");
+  const [suggestions, setSuggestions] = useState<{ label: string; body: string }[] | null>(null);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
   // Which draft key is streaming/displayed in the AI panel
   const [activeDraftKey, setActiveDraftKey] = useState(mode !== "new" && thread ? thread.id : NEW_KEY);
 
@@ -541,6 +554,38 @@ export default function Compose({
   const bodyDisplay = proofreadChunks
     ? reconstructFromChunks(proofreadChunks) + (proofreadQuoted ? "\n" + proofreadQuoted : "")
     : body;
+
+  const handleSuggestReplies = async () => {
+    if (!thread || !activeAccountId) return;
+    setSuggestError(null);
+    setSuggestions(null);
+    setLoadingSuggestions(true);
+    try {
+      const result = await invoke<{ label: string; body: string }[]>("suggest_replies", {
+        request: { thread_id: thread.id, account_id: activeAccountId, tone },
+      });
+      setSuggestions(result);
+    } catch (e) {
+      setSuggestError(String(e));
+    } finally {
+      setLoadingSuggestions(false);
+    }
+  };
+
+  const handleUseSuggestion = (suggBody: string) => {
+    setSuggestions(null);
+    if (!editor) {
+      setBody(suggBody);
+      return;
+    }
+    const quotedHtml = getQuotedHtml(editor.getHTML());
+    suppressBodyUpdate.current = true;
+    editor.commands.setContent(bodyToHtml(suggBody) + quotedHtml);
+    setBody(suggBody);
+    suppressBodyUpdate.current = false;
+    setJustInserted(true);
+    setTimeout(() => setJustInserted(false), 2500);
+  };
 
   const handleReplyAIDraft = async () => {
     if (!thread) return;
@@ -799,13 +844,60 @@ export default function Compose({
             ) : (
               <>
                 {isReplyMode && thread && (
-                  <button
-                    className={styles.aiGenerateBtn}
-                    onClick={handleReplyAIDraft}
-                    disabled={isGenerating || proofreading}
-                  >
-                    {isGenerating && activeDraftKey === thread.id ? "Drafting..." : "✦ Draft Reply"}
-                  </button>
+                  <>
+                    {/* Tone selector */}
+                    <div className={styles.toneSelector}>
+                      {(["professional", "casual", "friendly"] as const).map((t) => (
+                        <button
+                          key={t}
+                          className={`${styles.toneBtn} ${tone === t ? styles.toneBtnActive : ""}`}
+                          onClick={() => { setTone(t); setSuggestions(null); }}
+                        >
+                          {t.charAt(0).toUpperCase() + t.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Suggest replies */}
+                    <button
+                      className={styles.aiGenerateBtn}
+                      onClick={handleSuggestReplies}
+                      disabled={isGenerating || proofreading || loadingSuggestions}
+                    >
+                      {loadingSuggestions ? "Thinking..." : "✦ Suggest Replies"}
+                    </button>
+
+                    {/* Suggestion cards */}
+                    {suggestions && (
+                      <div className={styles.suggestionsList}>
+                        {suggestions.map((s) => (
+                          <div
+                            key={s.label}
+                            className={styles.suggestionCard}
+                            onClick={() => handleUseSuggestion(s.body)}
+                            title="Click to use this reply"
+                          >
+                            <div className={styles.suggestionLabel}>{s.label}</div>
+                            <div className={styles.suggestionBody}>{s.body}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {suggestError && <div className={styles.error}>{suggestError}</div>}
+
+                    {/* Divider */}
+                    <div className={styles.toolbarDivider} style={{ width: "100%", height: 1, margin: "2px 0" }} />
+
+                    {/* Draft reply (full stream into editor) */}
+                    <button
+                      className={styles.aiProofreadBtn}
+                      onClick={handleReplyAIDraft}
+                      disabled={isGenerating || proofreading || loadingSuggestions}
+                    >
+                      {isGenerating && activeDraftKey === thread.id ? "Drafting..." : "✦ Draft Full Reply"}
+                    </button>
+                  </>
                 )}
 
                 <p className={styles.aiPanelHint}>
@@ -848,6 +940,7 @@ export default function Compose({
                 {(aiError ?? proofreadError) && (
                   <div className={styles.error}>{aiError ?? proofreadError}</div>
                 )}
+
                 {proofreadInfo && (
                   <p className={styles.aiInsertedHint}>{proofreadInfo}</p>
                 )}

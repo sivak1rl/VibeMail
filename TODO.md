@@ -67,9 +67,9 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Configurable summary length (brief / detailed)
 
 ### Smart Reply
-- [ ] AI-generated reply suggestions (3 options: brief, detailed, decline)
-- [ ] Tone selector: professional, casual, friendly
-- [ ] Context-aware: uses full thread history, not just last message
+- [x] AI-generated reply suggestions (3 options: brief, detailed, decline)
+- [x] Tone selector: professional, casual, friendly
+- [x] Context-aware: uses full thread history, not just last message
 - [x] "Edit and send" flow — AI drafts, user refines, then sends
 
 ### Triage & Priority
