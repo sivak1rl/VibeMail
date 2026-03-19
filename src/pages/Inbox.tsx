@@ -10,9 +10,9 @@ import InboxList from "../components/InboxList/InboxList";
 import ThreadView from "../components/ThreadView/ThreadView";
 import SearchBar from "../components/SearchBar/SearchBar";
 import Compose, { type ComposeMode } from "../components/Compose/Compose";
-import Roundup from "../components/Roundup/Roundup";
 import styles from "./Inbox.module.css";
 import { invoke } from "@tauri-apps/api/core";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import logoTransparent from "../../logo_transparent.png";
 
 interface Props {
@@ -57,7 +57,22 @@ export default function Inbox({ onSettings }: Props) {
   const { loadConfig, summarizeThreads, categorizeThreads, batchSummarizing, batchCategorizing } = useAiStore();
   const { autoLabelNewEmails, customCategories, historyFetchDays, historyFetchLimit } = usePreferencesStore();
 
-  const [showRoundup, setShowRoundup] = useState(false);
+  const openRoundup = useCallback(async () => {
+    if (!activeAccountId) return;
+    const existing = await WebviewWindow.getByLabel("roundup");
+    if (existing) {
+      await existing.setFocus();
+      return;
+    }
+    new WebviewWindow("roundup", {
+      url: `index.html?window=roundup&accountId=${encodeURIComponent(activeAccountId)}`,
+      title: "Inbox Roundup",
+      width: 680,
+      height: 700,
+      resizable: true,
+      center: true,
+    });
+  }, [activeAccountId]);
   const [showSearch, setShowSearch] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
@@ -552,7 +567,7 @@ export default function Inbox({ onSettings }: Props) {
           <div className={styles.controls}>
             <button
               className={styles.roundupBtn}
-              onClick={() => setShowRoundup(true)}
+              onClick={openRoundup}
               disabled={!activeAccountId}
               title="Email roundup digest"
             >
@@ -679,10 +694,6 @@ export default function Inbox({ onSettings }: Props) {
         </div>
       )}
 
-      {/* Roundup modal */}
-      {showRoundup && activeAccountId && (
-        <Roundup accountId={activeAccountId} onClose={() => setShowRoundup(false)} />
-      )}
 
       {/* Keyboard shortcut help modal */}
       {showHelpModal && (

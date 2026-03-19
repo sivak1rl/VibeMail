@@ -68,6 +68,29 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         [],
     )?;
 
+    // Denormalized join table for fast mailbox→message lookups.
+    // Replaces json_each(inbox_mailboxes) in hot-path queries.
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS message_mailboxes (
+            message_id  TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+            mailbox_id  TEXT NOT NULL,
+            PRIMARY KEY (message_id, mailbox_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_msgmb_mailbox_msg ON message_mailboxes(mailbox_id, message_id);
+        "#,
+    )?;
+
+    // Backfill join table from existing inbox_mailboxes JSON.
+    // Only inserts rows that don't already exist (idempotent).
+    conn.execute(
+        r#"INSERT OR IGNORE INTO message_mailboxes (message_id, mailbox_id)
+           SELECT m.id, j.value
+           FROM messages m, json_each(m.inbox_mailboxes) j
+           WHERE m.inbox_mailboxes IS NOT NULL"#,
+        [],
+    )?;
+
     Ok(())
 }
 

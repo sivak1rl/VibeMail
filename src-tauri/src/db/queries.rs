@@ -142,16 +142,16 @@ impl Database {
             r#"SELECT mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next, mb.last_synced_at,
                (SELECT COUNT(DISTINCT m.thread_id)
                 FROM messages m
+                JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = mb.id
                 WHERE m.account_id = mb.account_id
                   AND m.thread_id IS NOT NULL
-                  AND EXISTS (SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = mb.id)
                ) AS thread_count,
                (SELECT COUNT(DISTINCT m.thread_id)
                 FROM messages m
+                JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = mb.id
                 WHERE m.account_id = mb.account_id
                   AND m.thread_id IS NOT NULL
                   AND instr(COALESCE(m.flags, ''), '\Seen') = 0
-                  AND EXISTS (SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = mb.id)
                ) AS unread_count
                FROM mailboxes mb
                WHERE mb.account_id=?1
@@ -254,6 +254,19 @@ impl Database {
                 inbox_mailboxes_json,
             ],
         )?;
+
+        // Keep denormalized join table in sync
+        self.conn.execute(
+            "DELETE FROM message_mailboxes WHERE message_id = ?1",
+            [&msg.id],
+        )?;
+        for mb in &msg.inbox_mailboxes {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO message_mailboxes (message_id, mailbox_id) VALUES (?1, ?2)",
+                rusqlite::params![msg.id, mb],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -328,8 +341,8 @@ impl Database {
                    WHERE t.account_id=?1
                      AND EXISTS (
                        SELECT 1 FROM messages m
+                       JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = ?2
                        WHERE m.thread_id = t.id
-                         AND EXISTS (SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = ?2)
                      )
                    ORDER BY t.last_date DESC LIMIT ?3 OFFSET ?4"#,
             )?;
@@ -365,15 +378,13 @@ impl Database {
                FROM threads WHERE account_id=?1 AND last_date >= ?2
                AND EXISTS (
                  SELECT 1 FROM messages m
+                 JOIN message_mailboxes mm ON mm.message_id = m.id
                  WHERE m.thread_id = threads.id
-                   AND EXISTS (
-                     SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE
-                       UPPER(value) NOT LIKE '%TRASH%'
-                       AND UPPER(value) NOT LIKE '%SPAM%'
-                       AND UPPER(value) NOT LIKE '%JUNK%'
-                       AND UPPER(value) NOT LIKE '%ALL MAIL%'
-                       AND UPPER(value) NOT LIKE '%DRAFT%'
-                   )
+                   AND UPPER(mm.mailbox_id) NOT LIKE '%TRASH%'
+                   AND UPPER(mm.mailbox_id) NOT LIKE '%SPAM%'
+                   AND UPPER(mm.mailbox_id) NOT LIKE '%JUNK%'
+                   AND UPPER(mm.mailbox_id) NOT LIKE '%ALL MAIL%'
+                   AND UPPER(mm.mailbox_id) NOT LIKE '%DRAFT%'
                )
                ORDER BY COALESCE(triage_score, 0.5) DESC, last_date DESC LIMIT ?3"#,
         )?;
@@ -419,15 +430,13 @@ impl Database {
         let system_folder_filter = r#"
             AND EXISTS (
               SELECT 1 FROM messages m
+              JOIN message_mailboxes mm ON mm.message_id = m.id
               WHERE m.thread_id = t.id
-                AND EXISTS (
-                  SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE
-                    UPPER(value) NOT LIKE '%TRASH%'
-                    AND UPPER(value) NOT LIKE '%SPAM%'
-                    AND UPPER(value) NOT LIKE '%JUNK%'
-                    AND UPPER(value) NOT LIKE '%ALL MAIL%'
-                    AND UPPER(value) NOT LIKE '%DRAFT%'
-                )
+                AND UPPER(mm.mailbox_id) NOT LIKE '%TRASH%'
+                AND UPPER(mm.mailbox_id) NOT LIKE '%SPAM%'
+                AND UPPER(mm.mailbox_id) NOT LIKE '%JUNK%'
+                AND UPPER(mm.mailbox_id) NOT LIKE '%ALL MAIL%'
+                AND UPPER(mm.mailbox_id) NOT LIKE '%DRAFT%'
             )"#;
 
         let total: i64 = self.conn.query_row(
@@ -800,7 +809,7 @@ impl Database {
         let mut params: Vec<rusqlite::types::Value> = vec![account_id.to_string().into()];
 
         if let Some(mid) = mailbox_id {
-            sql.push_str("AND EXISTS (SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = ?) ");
+            sql.push_str("AND EXISTS (SELECT 1 FROM message_mailboxes mm WHERE mm.message_id = m.id AND mm.mailbox_id = ?) ");
             params.push(mid.to_string().into());
         }
 
@@ -876,8 +885,8 @@ impl Database {
                  FROM threads t
                  WHERE t.id IN ({}) AND EXISTS (
                    SELECT 1 FROM messages m
+                   JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = ?{}
                    WHERE m.thread_id = t.id
-                     AND EXISTS (SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = ?{})
                  )
                  ORDER BY t.last_date DESC",
                 placeholders,
