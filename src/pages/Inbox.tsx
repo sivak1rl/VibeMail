@@ -12,6 +12,7 @@ import SearchBar from "../components/SearchBar/SearchBar";
 import Compose, { type ComposeMode } from "../components/Compose/Compose";
 import styles from "./Inbox.module.css";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import logoTransparent from "../../logo_transparent.png";
 
@@ -338,6 +339,29 @@ export default function Inbox({ onSettings }: Props) {
   useEffect(() => {
     setReplyComposeMode(null);
   }, [selectedThreadId]);
+
+  // Listen for cross-window actions from the roundup window
+  useEffect(() => {
+    const unlisteners: Promise<() => void>[] = [];
+
+    unlisteners.push(
+      listen<{ threadId: string }>("roundup:open-thread", (event) => {
+        void selectThread(event.payload.threadId);
+      })
+    );
+
+    unlisteners.push(
+      listen<{ threadId: string }>("roundup:reply-thread", (event) => {
+        void selectThread(event.payload.threadId);
+        // Small delay so thread loads before opening compose
+        setTimeout(() => setReplyComposeMode("reply"), 200);
+      })
+    );
+
+    return () => {
+      unlisteners.forEach((p) => void p.then((unlisten) => unlisten()));
+    };
+  }, [selectThread]);
 
   // Keyboard shortcuts
   useEffect(() => {
