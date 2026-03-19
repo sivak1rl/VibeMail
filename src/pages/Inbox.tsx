@@ -10,6 +10,7 @@ import InboxList from "../components/InboxList/InboxList";
 import ThreadView from "../components/ThreadView/ThreadView";
 import SearchBar from "../components/SearchBar/SearchBar";
 import Compose, { type ComposeMode } from "../components/Compose/Compose";
+import Roundup from "../components/Roundup/Roundup";
 import styles from "./Inbox.module.css";
 import { invoke } from "@tauri-apps/api/core";
 import logoTransparent from "../../logo_transparent.png";
@@ -56,6 +57,7 @@ export default function Inbox({ onSettings }: Props) {
   const { loadConfig, summarizeThreads, categorizeThreads, batchSummarizing, batchCategorizing } = useAiStore();
   const { autoLabelNewEmails, customCategories, historyFetchDays, historyFetchLimit } = usePreferencesStore();
 
+  const [showRoundup, setShowRoundup] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
@@ -549,6 +551,14 @@ export default function Inbox({ onSettings }: Props) {
           </div>
           <div className={styles.controls}>
             <button
+              className={styles.roundupBtn}
+              onClick={() => setShowRoundup(true)}
+              disabled={!activeAccountId}
+              title="Email roundup digest"
+            >
+              Roundup
+            </button>
+            <button
               className={`${styles.focusBtn} ${focusMode ? styles.focusActive : ""}`}
               onClick={() => setFocusMode(!focusMode)}
               title="Focus: show only important mail"
@@ -667,6 +677,11 @@ export default function Inbox({ onSettings }: Props) {
             />
           </div>
         </div>
+      )}
+
+      {/* Roundup modal */}
+      {showRoundup && activeAccountId && (
+        <Roundup accountId={activeAccountId} onClose={() => setShowRoundup(false)} />
       )}
 
       {/* Keyboard shortcut help modal */}

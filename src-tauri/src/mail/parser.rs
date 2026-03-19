@@ -82,6 +82,7 @@ pub fn parse_message(
         has_attachments,
         triage_score: None,
         ai_summary: None,
+        inbox_mailboxes: Vec::new(),
     };
 
     Ok((msg, attachments))

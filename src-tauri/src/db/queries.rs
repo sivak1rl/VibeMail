@@ -138,18 +138,34 @@ impl Database {
     }
 
     pub fn list_mailboxes_with_counts(&self, account_id: &str) -> Result<Vec<MailboxStats>> {
+        // Check both legacy (mailbox_id) and new Gmail All Mail (inbox_mailboxes) paths.
         let mut stmt = self.conn.prepare(
             r#"SELECT mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next, mb.last_synced_at,
-               COUNT(DISTINCT m.thread_id) AS thread_count,
-               COUNT(DISTINCT CASE
-                 WHEN m.thread_id IS NOT NULL
-                  AND instr(COALESCE(m.flags, ''), '\\Seen') = 0
-                 THEN m.thread_id
-               END) AS unread_count
+               (SELECT COUNT(DISTINCT m.thread_id)
+                FROM messages m
+                WHERE m.account_id = mb.account_id
+                  AND m.thread_id IS NOT NULL
+                  AND (
+                    (m.inbox_mailboxes IS NULL AND m.mailbox_id = mb.id)
+                    OR (m.inbox_mailboxes IS NOT NULL AND EXISTS (
+                      SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = mb.id
+                    ))
+                  )
+               ) AS thread_count,
+               (SELECT COUNT(DISTINCT m.thread_id)
+                FROM messages m
+                WHERE m.account_id = mb.account_id
+                  AND m.thread_id IS NOT NULL
+                  AND instr(COALESCE(m.flags, ''), '\Seen') = 0
+                  AND (
+                    (m.inbox_mailboxes IS NULL AND m.mailbox_id = mb.id)
+                    OR (m.inbox_mailboxes IS NOT NULL AND EXISTS (
+                      SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = mb.id
+                    ))
+                  )
+               ) AS unread_count
                FROM mailboxes mb
-               LEFT JOIN messages m ON m.mailbox_id = mb.id
                WHERE mb.account_id=?1
-               GROUP BY mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next, mb.last_synced_at
                ORDER BY CASE WHEN UPPER(mb.name) = 'INBOX' THEN 0 ELSE 1 END, mb.name COLLATE NOCASE"#,
         )?;
         let mailboxes = stmt
@@ -208,12 +224,17 @@ impl Database {
     }
 
     pub fn upsert_message(&self, msg: &Message) -> Result<()> {
+        let inbox_mailboxes_json = if msg.inbox_mailboxes.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&msg.inbox_mailboxes)?)
+        };
         self.conn.execute(
             r#"INSERT INTO messages
                (id, account_id, mailbox_id, uid, message_id, thread_id, subject, "from", "to", cc,
                 date, body_text, body_html, references_ids, in_reply_to, flags, has_attachments,
-                triage_score, ai_summary)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)
+                triage_score, ai_summary, inbox_mailboxes)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
                ON CONFLICT(id) DO UPDATE SET
                message_id=excluded.message_id, thread_id=excluded.thread_id,
                subject=excluded.subject, "from"=excluded."from", "to"=excluded."to",
@@ -223,6 +244,7 @@ impl Database {
                has_attachments=excluded.has_attachments,
                triage_score=COALESCE(excluded.triage_score, messages.triage_score),
                ai_summary=COALESCE(excluded.ai_summary, messages.ai_summary),
+               inbox_mailboxes=COALESCE(excluded.inbox_mailboxes, messages.inbox_mailboxes),
                synced_at=unixepoch()"#,
             rusqlite::params![
                 msg.id,
@@ -244,6 +266,7 @@ impl Database {
                 msg.has_attachments as i64,
                 msg.triage_score,
                 msg.ai_summary,
+                inbox_mailboxes_json,
             ],
         )?;
         Ok(())
@@ -320,7 +343,13 @@ impl Database {
                    WHERE t.account_id=?1
                      AND EXISTS (
                        SELECT 1 FROM messages m
-                       WHERE m.thread_id = t.id AND m.mailbox_id = ?2
+                       WHERE m.thread_id = t.id
+                         AND (
+                           (m.inbox_mailboxes IS NULL AND m.mailbox_id = ?2)
+                           OR (m.inbox_mailboxes IS NOT NULL AND EXISTS (
+                             SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = ?2
+                           ))
+                         )
                      )
                    ORDER BY t.last_date DESC LIMIT ?3 OFFSET ?4"#,
             )?;
@@ -342,11 +371,146 @@ impl Database {
         Ok(threads)
     }
 
+    pub fn get_threads_in_window(
+        &self,
+        account_id: &str,
+        since_timestamp: i64,
+        limit: u32,
+    ) -> Result<Vec<Thread>> {
+        let limit = limit as i64;
+        // Exclude threads that only exist in system folders (Trash, Spam, All Mail).
+        // Handles both legacy (mailbox_id join) and Gmail All Mail (inbox_mailboxes) paths.
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, account_id, subject, participant_ids, message_count, unread_count,
+               is_flagged, has_attachments, last_date, last_from, triage_score, labels
+               FROM threads WHERE account_id=?1 AND last_date >= ?2
+               AND EXISTS (
+                 SELECT 1 FROM messages m
+                 WHERE m.thread_id = threads.id
+                   AND (
+                     (m.inbox_mailboxes IS NULL AND EXISTS (
+                       SELECT 1 FROM mailboxes mb WHERE mb.id = m.mailbox_id
+                         AND UPPER(mb.name) NOT LIKE '%TRASH%'
+                         AND UPPER(mb.name) NOT LIKE '%SPAM%'
+                         AND UPPER(mb.name) NOT LIKE '%JUNK%'
+                         AND UPPER(mb.name) NOT LIKE '%ALL MAIL%'
+                         AND UPPER(mb.name) NOT LIKE '%DRAFT%'
+                     ))
+                     OR (m.inbox_mailboxes IS NOT NULL AND EXISTS (
+                       SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE
+                         UPPER(value) NOT LIKE '%TRASH%'
+                         AND UPPER(value) NOT LIKE '%SPAM%'
+                         AND UPPER(value) NOT LIKE '%JUNK%'
+                         AND UPPER(value) NOT LIKE '%ALL MAIL%'
+                         AND UPPER(value) NOT LIKE '%DRAFT%'
+                     ))
+                   )
+               )
+               ORDER BY COALESCE(triage_score, 0.5) DESC, last_date DESC LIMIT ?3"#,
+        )?;
+        let threads = stmt
+            .query_map(
+                rusqlite::params![account_id, since_timestamp, limit],
+                |row| {
+                    Ok(Thread {
+                        id: row.get(0)?,
+                        account_id: row.get(1)?,
+                        subject: row.get(2)?,
+                        participants: serde_json::from_str(
+                            &row.get::<_, String>(3).unwrap_or_default(),
+                        )
+                        .unwrap_or_default(),
+                        message_count: row.get::<_, i64>(4)? as u32,
+                        unread_count: row.get::<_, i64>(5)? as u32,
+                        is_flagged: row.get::<_, i64>(6)? != 0,
+                        has_attachments: row.get::<_, i64>(7)? != 0,
+                        last_date: row
+                            .get::<_, Option<i64>>(8)?
+                            .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+                        last_from: row.get(9)?,
+                        triage_score: row.get(10)?,
+                        labels: serde_json::from_str(
+                            &row.get::<_, String>(11).unwrap_or_default(),
+                        )
+                        .unwrap_or_default(),
+                        messages: None,
+                    })
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(threads)
+    }
+
+    pub fn get_roundup_stats(
+        &self,
+        account_id: &str,
+        since_timestamp: i64,
+    ) -> Result<(usize, usize, usize)> {
+        // Shared filter: exclude threads that only exist in system folders.
+        // Handles both legacy (mailbox_id join) and Gmail All Mail (inbox_mailboxes) paths.
+        let system_folder_filter = r#"
+            AND EXISTS (
+              SELECT 1 FROM messages m
+              WHERE m.thread_id = t.id
+                AND (
+                  (m.inbox_mailboxes IS NULL AND EXISTS (
+                    SELECT 1 FROM mailboxes mb WHERE mb.id = m.mailbox_id
+                      AND UPPER(mb.name) NOT LIKE '%TRASH%'
+                      AND UPPER(mb.name) NOT LIKE '%SPAM%'
+                      AND UPPER(mb.name) NOT LIKE '%JUNK%'
+                      AND UPPER(mb.name) NOT LIKE '%ALL MAIL%'
+                      AND UPPER(mb.name) NOT LIKE '%DRAFT%'
+                  ))
+                  OR (m.inbox_mailboxes IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE
+                      UPPER(value) NOT LIKE '%TRASH%'
+                      AND UPPER(value) NOT LIKE '%SPAM%'
+                      AND UPPER(value) NOT LIKE '%JUNK%'
+                      AND UPPER(value) NOT LIKE '%ALL MAIL%'
+                      AND UPPER(value) NOT LIKE '%DRAFT%'
+                  ))
+                )
+            )"#;
+
+        let total: i64 = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM threads t WHERE t.account_id=?1 AND t.last_date >= ?2 {}",
+                system_folder_filter
+            ),
+            rusqlite::params![account_id, since_timestamp],
+            |row| row.get(0),
+        )?;
+
+        let unread: i64 = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM threads t WHERE t.account_id=?1 AND t.last_date >= ?2 AND t.unread_count > 0 {}",
+                system_folder_filter
+            ),
+            rusqlite::params![account_id, since_timestamp],
+            |row| row.get(0),
+        )?;
+
+        let action_items: i64 = self.conn.query_row(
+            &format!(
+                r#"SELECT COUNT(*) FROM thread_actions ta
+                   JOIN threads t ON ta.thread_id = t.id
+                   WHERE t.account_id=?1 AND t.last_date >= ?2
+                     AND ta.actions_json != '[]' AND ta.actions_json != ''
+                   {}"#,
+                system_folder_filter
+            ),
+            rusqlite::params![account_id, since_timestamp],
+            |row| row.get(0),
+        )?;
+
+        Ok((total as usize, unread as usize, action_items as usize))
+    }
+
     pub fn get_thread_messages(&self, thread_id: &str) -> Result<Vec<Message>> {
         let mut stmt = self.conn.prepare(
             r#"SELECT id, account_id, mailbox_id, uid, message_id, thread_id, subject,
                "from", "to", cc, date, body_text, body_html, references_ids, in_reply_to,
-               flags, has_attachments, triage_score, ai_summary
+               flags, has_attachments, triage_score, ai_summary, inbox_mailboxes
                FROM messages WHERE thread_id=?1 ORDER BY date ASC"#,
         )?;
         let messages = stmt
@@ -380,6 +544,11 @@ impl Database {
                     has_attachments: row.get::<_, i64>(16)? != 0,
                     triage_score: row.get(17)?,
                     ai_summary: row.get(18)?,
+                    inbox_mailboxes: row
+                        .get::<_, Option<String>>(19)?
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or_default(),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -499,6 +668,35 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    /// Returns a map of message_id header → thread_id for all known messages matching
+    /// the given Message-ID headers. Used to detect cross-mailbox duplicates (e.g. Gmail labels).
+    pub fn get_thread_ids_by_message_ids(
+        &self,
+        message_ids: &[String],
+    ) -> Result<HashMap<String, String>> {
+        if message_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = message_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT message_id, thread_id FROM messages
+             WHERE message_id IN ({}) AND message_id IS NOT NULL AND thread_id IS NOT NULL",
+            placeholders
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let map = stmt
+            .query_map(rusqlite::params_from_iter(message_ids.iter()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<HashMap<_, _>>>()?;
+        Ok(map)
     }
 
     pub fn set_thread_read_state(&self, thread_id: &str, read: bool) -> Result<()> {
@@ -1258,6 +1456,7 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
+            inbox_mailboxes: Vec::new(),
         };
         db.upsert_message(&build_message("msg-inbox", &inbox_thread.id, &inbox.id))
             .expect("inbox message");
@@ -1361,6 +1560,7 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
+            inbox_mailboxes: Vec::new(),
         };
         let read_message = Message {
             id: "msg-read".to_string(),
@@ -1382,6 +1582,7 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
+            inbox_mailboxes: Vec::new(),
         };
         db.upsert_message(&unread_message).expect("unread message");
         db.upsert_message(&read_message).expect("read message");
@@ -1500,6 +1701,7 @@ mod tests {
                 has_attachments: false,
                 triage_score: None,
                 ai_summary: None,
+                inbox_mailboxes: Vec::new(),
             })
             .expect("message");
         }

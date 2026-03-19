@@ -52,6 +52,9 @@ pub struct Message {
     pub has_attachments: bool,
     pub triage_score: Option<f64>,
     pub ai_summary: Option<String>,
+    /// JSON array of mailbox IDs this message belongs to, derived from X-GM-LABELS.
+    /// NULL for messages synced the legacy way (mailbox_id is canonical).
+    pub inbox_mailboxes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

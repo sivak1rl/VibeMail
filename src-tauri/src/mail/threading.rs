@@ -106,7 +106,11 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
     let mut threads = Vec::new();
 
     for root_id in root_ids {
-        let thread_id = Uuid::new_v4().to_string();
+        // Reuse an existing thread_id if any message in this group already belongs to one.
+        // This prevents duplicate threads when the same conversation is synced from multiple
+        // Gmail label folders (e.g. INBOX and [Gmail]/All Mail).
+        let thread_id = find_existing_thread_id(&id_table, &root_id)
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
         let mut thread_messages = Vec::new();
         collect_messages(&id_table, &root_id, &thread_id, &mut thread_messages);
 
@@ -178,6 +182,22 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
     threads
 }
 
+/// Walk the thread subtree rooted at `id` and return the first thread_id found on any message.
+/// Messages fetched from the DB already have thread_id set; messages from the current IMAP
+/// batch do not. Reusing an existing id prevents duplicate Thread rows when the same
+/// conversation is synced from multiple mailboxes (e.g. Gmail labels).
+fn find_existing_thread_id(table: &HashMap<String, ThreadNode>, id: &str) -> Option<String> {
+    let node = table.get(id)?;
+    if let Some(ref msg) = node.message {
+        if let Some(ref tid) = msg.thread_id {
+            return Some(tid.clone());
+        }
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_existing_thread_id(table, child))
+}
+
 fn collect_messages(
     table: &HashMap<String, ThreadNode>,
     id: &str,
@@ -225,6 +245,7 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
+            inbox_mailboxes: Vec::new(),
         }
     }
 

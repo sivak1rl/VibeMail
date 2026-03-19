@@ -156,7 +156,7 @@ pub async fn fetch_history(
                         println!(">>> HISTORY: Parsed {} fetches from server", fetches.len());
 
                         let gmail_labels = if account.provider == "gmail" {
-                            crate::mail::imap::fetch_gmail_vibemail_labels(&mut session, &uid_range)
+                            crate::mail::imap::fetch_all_gmail_labels(&mut session, &uid_range)
                                 .await?
                         } else {
                             HashMap::new()
@@ -351,10 +351,41 @@ async fn sync_all_folders(
     search: Arc<Mutex<SearchIndex>>,
     app: AppHandle,
 ) -> anyhow::Result<usize> {
-    let mailboxes = {
+    let (account, mailboxes) = {
         let db = db.lock().await;
-        db.list_mailboxes(account_id)?
+        let account = db
+            .list_accounts()?
+            .into_iter()
+            .find(|a| a.id == account_id)
+            .ok_or_else(|| anyhow::anyhow!("Account not found"))?;
+        let mailboxes = db.list_mailboxes(account_id)?;
+        (account, mailboxes)
     };
+
+    // Gmail: sync only [Gmail]/All Mail — X-GM-LABELS gives us full label/folder membership
+    // per message, so a single pass is enough and we avoid duplicate thread rows.
+    if account.provider == "gmail" {
+        let all_mail = mailboxes
+            .iter()
+            .find(|mb| mb.name.to_lowercase() == "[gmail]/all mail");
+
+        if let Some(mb) = all_mail {
+            let _ = app.emit(
+                "sync-progress",
+                SyncProgress {
+                    message: "Syncing All Mail…".to_string(),
+                    current: Some(1),
+                    total: Some(1),
+                },
+            );
+            return do_sync(account_id, Some(&mb.id.clone()), db, search, app).await;
+        }
+        // No All Mail mailbox yet — fall through to normal sync so we get mail on first setup
+        tracing::warn!(
+            "Gmail account {} has no [Gmail]/All Mail mailbox; falling back to per-folder sync",
+            account.email
+        );
+    }
 
     let total = mailboxes.len();
     let mut total_new = 0;
@@ -1190,7 +1221,7 @@ pub async fn fetch_entire_mailbox(
                         .await?;
 
                     let gmail_labels = if account.provider == "gmail" {
-                        crate::mail::imap::fetch_gmail_vibemail_labels(&mut session, &uid_range)
+                        crate::mail::imap::fetch_all_gmail_labels(&mut session, &uid_range)
                             .await?
                     } else {
                         HashMap::new()

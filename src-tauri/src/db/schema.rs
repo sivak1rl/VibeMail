@@ -44,6 +44,21 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         )?;
     }
 
+    // Gmail All Mail source-of-truth: stores all mailbox IDs a message belongs to,
+    // derived from X-GM-LABELS. NULL for messages synced the old way (mailbox_id is canonical).
+    let has_inbox_mailboxes: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('messages') WHERE name='inbox_mailboxes'",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if has_inbox_mailboxes == 0 {
+        conn.execute(
+            "ALTER TABLE messages ADD COLUMN inbox_mailboxes TEXT",
+            [],
+        )?;
+    }
+
     Ok(())
 }
 
