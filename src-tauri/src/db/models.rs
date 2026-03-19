@@ -52,8 +52,9 @@ pub struct Message {
     pub has_attachments: bool,
     pub triage_score: Option<f64>,
     pub ai_summary: Option<String>,
-    /// JSON array of mailbox IDs this message belongs to, derived from X-GM-LABELS.
-    /// NULL for messages synced the legacy way (mailbox_id is canonical).
+    /// JSON array of mailbox IDs this message belongs to.
+    /// For Gmail: derived from X-GM-LABELS. For other providers: [mailbox_id].
+    /// Always populated; never NULL.
     pub inbox_mailboxes: Vec<String>,
 }
 

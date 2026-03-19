@@ -313,8 +313,20 @@ pub async fn sync_account(
     let account_id_task = account_id.clone();
     let mailbox_id_task = mailbox_id.clone();
 
+    // Check provider before spawning — Gmail always syncs via All Mail
+    let is_gmail = {
+        let db = db.lock().await;
+        db.list_accounts()
+            .ok()
+            .and_then(|accs| accs.into_iter().find(|a| a.id == account_id))
+            .map(|a| a.provider == "gmail")
+            .unwrap_or(false)
+    };
+
     tokio::spawn(async move {
         let result = if let Some(mid) = &mailbox_id_task {
+            // Specific mailbox requested — sync it directly.
+            // For Gmail, X-GM-LABELS are still fetched in sync_mailbox to populate inbox_mailboxes.
             do_sync(
                 &account_id_task,
                 Some(mid),
@@ -323,6 +335,9 @@ pub async fn sync_account(
                 app_clone,
             )
             .await
+        } else if is_gmail {
+            // Gmail with no specific mailbox: sync only [Gmail]/All Mail
+            sync_all_folders(&account_id_task, db_clone, search_clone, app_clone).await
         } else {
             sync_all_folders(&account_id_task, db_clone, search_clone, app_clone).await
         };

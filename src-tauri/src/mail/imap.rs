@@ -397,6 +397,7 @@ pub fn parse_fetches(
                     .filter(|s| !s.is_empty())
                     .collect();
                 if let Some(raw_labels) = gmail_labels.get(&uid) {
+                    println!(">>> GMAIL LABELS uid={}: {:?}", uid, raw_labels);
                     // VibeMail/* labels → append to flags (existing categorisation system)
                     for label in raw_labels {
                         if let Some(vibe) = extract_vibemail_label(label) {
@@ -407,10 +408,22 @@ pub fn parse_fetches(
                     msg.inbox_mailboxes = raw_labels
                         .iter()
                         .filter_map(|label| {
-                            gmail_label_to_mailbox_name(label)
-                                .map(|mb_name| format!("{}:{}", account.id, mb_name))
+                            let resolved = gmail_label_to_mailbox_name(label);
+                            if resolved.is_none() && (label.starts_with('\\') || label.starts_with("\\\\")) {
+                                println!(">>> GMAIL SYSTEM LABEL UNRESOLVED: {:?} (bytes: {:?})", label, label.as_bytes());
+                            }
+                            resolved.map(|mb_name| format!("{}:{}", account.id, mb_name))
                         })
                         .collect();
+                    println!(">>> INBOX_MAILBOXES uid={}: {:?}", uid, msg.inbox_mailboxes);
+                } else {
+                    println!(">>> GMAIL LABELS uid={}: NO LABELS RETURNED", uid);
+                }
+                // Always include the mailbox we're syncing from.
+                // For Gmail All Mail: ensures messages appear under All Mail in sidebar.
+                // For non-Gmail: sets the single canonical mailbox.
+                if !msg.inbox_mailboxes.contains(&mailbox.id) {
+                    msg.inbox_mailboxes.push(mailbox.id.clone());
                 }
                 results.push((msg, atts));
             }
@@ -595,7 +608,10 @@ pub async fn fetch_all_gmail_labels(
 /// Returns None for unknown or user-defined labels.
 fn gmail_label_to_mailbox_name(label: &str) -> Option<&str> {
     let trimmed = label.trim_matches('"');
-    match trimmed {
+    // imap-proto returns system labels with double backslashes (e.g., "\\Inbox")
+    // so we strip one leading backslash before matching.
+    let normalized = trimmed.strip_prefix('\\').unwrap_or(trimmed);
+    match normalized {
         "\\Inbox" => Some("INBOX"),
         "\\Sent" => Some("[Gmail]/Sent Mail"),
         "\\Draft" => Some("[Gmail]/Drafts"),

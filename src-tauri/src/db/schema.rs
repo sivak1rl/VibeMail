@@ -44,8 +44,9 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         )?;
     }
 
-    // Gmail All Mail source-of-truth: stores all mailbox IDs a message belongs to,
-    // derived from X-GM-LABELS. NULL for messages synced the old way (mailbox_id is canonical).
+    // inbox_mailboxes: JSON array of mailbox IDs this message belongs to.
+    // For Gmail: derived from X-GM-LABELS. For other providers: [mailbox_id].
+    // Always populated; never NULL.
     let has_inbox_mailboxes: i64 = conn.query_row(
         "SELECT count(*) FROM pragma_table_info('messages') WHERE name='inbox_mailboxes'",
         [],
@@ -58,6 +59,14 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
             [],
         )?;
     }
+
+    // Backfill: set inbox_mailboxes = [mailbox_id] for any pre-migration rows.
+    // Safe for non-Gmail (mailbox_id was canonical) and skips Gmail rows that
+    // already have inbox_mailboxes set from X-GM-LABELS.
+    conn.execute(
+        "UPDATE messages SET inbox_mailboxes = json_array(mailbox_id) WHERE inbox_mailboxes IS NULL",
+        [],
+    )?;
 
     Ok(())
 }

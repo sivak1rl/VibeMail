@@ -138,31 +138,20 @@ impl Database {
     }
 
     pub fn list_mailboxes_with_counts(&self, account_id: &str) -> Result<Vec<MailboxStats>> {
-        // Check both legacy (mailbox_id) and new Gmail All Mail (inbox_mailboxes) paths.
         let mut stmt = self.conn.prepare(
             r#"SELECT mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next, mb.last_synced_at,
                (SELECT COUNT(DISTINCT m.thread_id)
                 FROM messages m
                 WHERE m.account_id = mb.account_id
                   AND m.thread_id IS NOT NULL
-                  AND (
-                    (m.inbox_mailboxes IS NULL AND m.mailbox_id = mb.id)
-                    OR (m.inbox_mailboxes IS NOT NULL AND EXISTS (
-                      SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = mb.id
-                    ))
-                  )
+                  AND EXISTS (SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = mb.id)
                ) AS thread_count,
                (SELECT COUNT(DISTINCT m.thread_id)
                 FROM messages m
                 WHERE m.account_id = mb.account_id
                   AND m.thread_id IS NOT NULL
                   AND instr(COALESCE(m.flags, ''), '\Seen') = 0
-                  AND (
-                    (m.inbox_mailboxes IS NULL AND m.mailbox_id = mb.id)
-                    OR (m.inbox_mailboxes IS NOT NULL AND EXISTS (
-                      SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = mb.id
-                    ))
-                  )
+                  AND EXISTS (SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = mb.id)
                ) AS unread_count
                FROM mailboxes mb
                WHERE mb.account_id=?1
@@ -224,11 +213,7 @@ impl Database {
     }
 
     pub fn upsert_message(&self, msg: &Message) -> Result<()> {
-        let inbox_mailboxes_json = if msg.inbox_mailboxes.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_string(&msg.inbox_mailboxes)?)
-        };
+        let inbox_mailboxes_json = serde_json::to_string(&msg.inbox_mailboxes)?;
         self.conn.execute(
             r#"INSERT INTO messages
                (id, account_id, mailbox_id, uid, message_id, thread_id, subject, "from", "to", cc,
@@ -244,7 +229,7 @@ impl Database {
                has_attachments=excluded.has_attachments,
                triage_score=COALESCE(excluded.triage_score, messages.triage_score),
                ai_summary=COALESCE(excluded.ai_summary, messages.ai_summary),
-               inbox_mailboxes=COALESCE(excluded.inbox_mailboxes, messages.inbox_mailboxes),
+               inbox_mailboxes=excluded.inbox_mailboxes,
                synced_at=unixepoch()"#,
             rusqlite::params![
                 msg.id,
@@ -344,12 +329,7 @@ impl Database {
                      AND EXISTS (
                        SELECT 1 FROM messages m
                        WHERE m.thread_id = t.id
-                         AND (
-                           (m.inbox_mailboxes IS NULL AND m.mailbox_id = ?2)
-                           OR (m.inbox_mailboxes IS NOT NULL AND EXISTS (
-                             SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = ?2
-                           ))
-                         )
+                         AND EXISTS (SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = ?2)
                      )
                    ORDER BY t.last_date DESC LIMIT ?3 OFFSET ?4"#,
             )?;
@@ -378,8 +358,7 @@ impl Database {
         limit: u32,
     ) -> Result<Vec<Thread>> {
         let limit = limit as i64;
-        // Exclude threads that only exist in system folders (Trash, Spam, All Mail).
-        // Handles both legacy (mailbox_id join) and Gmail All Mail (inbox_mailboxes) paths.
+        // Exclude threads that only exist in system folders (Trash, Spam, All Mail, Drafts).
         let mut stmt = self.conn.prepare(
             r#"SELECT id, account_id, subject, participant_ids, message_count, unread_count,
                is_flagged, has_attachments, last_date, last_from, triage_score, labels
@@ -387,23 +366,13 @@ impl Database {
                AND EXISTS (
                  SELECT 1 FROM messages m
                  WHERE m.thread_id = threads.id
-                   AND (
-                     (m.inbox_mailboxes IS NULL AND EXISTS (
-                       SELECT 1 FROM mailboxes mb WHERE mb.id = m.mailbox_id
-                         AND UPPER(mb.name) NOT LIKE '%TRASH%'
-                         AND UPPER(mb.name) NOT LIKE '%SPAM%'
-                         AND UPPER(mb.name) NOT LIKE '%JUNK%'
-                         AND UPPER(mb.name) NOT LIKE '%ALL MAIL%'
-                         AND UPPER(mb.name) NOT LIKE '%DRAFT%'
-                     ))
-                     OR (m.inbox_mailboxes IS NOT NULL AND EXISTS (
-                       SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE
-                         UPPER(value) NOT LIKE '%TRASH%'
-                         AND UPPER(value) NOT LIKE '%SPAM%'
-                         AND UPPER(value) NOT LIKE '%JUNK%'
-                         AND UPPER(value) NOT LIKE '%ALL MAIL%'
-                         AND UPPER(value) NOT LIKE '%DRAFT%'
-                     ))
+                   AND EXISTS (
+                     SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE
+                       UPPER(value) NOT LIKE '%TRASH%'
+                       AND UPPER(value) NOT LIKE '%SPAM%'
+                       AND UPPER(value) NOT LIKE '%JUNK%'
+                       AND UPPER(value) NOT LIKE '%ALL MAIL%'
+                       AND UPPER(value) NOT LIKE '%DRAFT%'
                    )
                )
                ORDER BY COALESCE(triage_score, 0.5) DESC, last_date DESC LIMIT ?3"#,
@@ -447,28 +416,17 @@ impl Database {
         since_timestamp: i64,
     ) -> Result<(usize, usize, usize)> {
         // Shared filter: exclude threads that only exist in system folders.
-        // Handles both legacy (mailbox_id join) and Gmail All Mail (inbox_mailboxes) paths.
         let system_folder_filter = r#"
             AND EXISTS (
               SELECT 1 FROM messages m
               WHERE m.thread_id = t.id
-                AND (
-                  (m.inbox_mailboxes IS NULL AND EXISTS (
-                    SELECT 1 FROM mailboxes mb WHERE mb.id = m.mailbox_id
-                      AND UPPER(mb.name) NOT LIKE '%TRASH%'
-                      AND UPPER(mb.name) NOT LIKE '%SPAM%'
-                      AND UPPER(mb.name) NOT LIKE '%JUNK%'
-                      AND UPPER(mb.name) NOT LIKE '%ALL MAIL%'
-                      AND UPPER(mb.name) NOT LIKE '%DRAFT%'
-                  ))
-                  OR (m.inbox_mailboxes IS NOT NULL AND EXISTS (
-                    SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE
-                      UPPER(value) NOT LIKE '%TRASH%'
-                      AND UPPER(value) NOT LIKE '%SPAM%'
-                      AND UPPER(value) NOT LIKE '%JUNK%'
-                      AND UPPER(value) NOT LIKE '%ALL MAIL%'
-                      AND UPPER(value) NOT LIKE '%DRAFT%'
-                  ))
+                AND EXISTS (
+                  SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE
+                    UPPER(value) NOT LIKE '%TRASH%'
+                    AND UPPER(value) NOT LIKE '%SPAM%'
+                    AND UPPER(value) NOT LIKE '%JUNK%'
+                    AND UPPER(value) NOT LIKE '%ALL MAIL%'
+                    AND UPPER(value) NOT LIKE '%DRAFT%'
                 )
             )"#;
 
@@ -842,7 +800,7 @@ impl Database {
         let mut params: Vec<rusqlite::types::Value> = vec![account_id.to_string().into()];
 
         if let Some(mid) = mailbox_id {
-            sql.push_str("AND m.mailbox_id = ? ");
+            sql.push_str("AND EXISTS (SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = ?) ");
             params.push(mid.to_string().into());
         }
 
@@ -912,12 +870,15 @@ impl Database {
 
         let sql = if let Some(_mid) = mailbox_id {
             format!(
-                "SELECT DISTINCT t.id, t.account_id, t.subject, t.participant_ids, t.message_count, 
-                        t.unread_count, t.is_flagged, t.has_attachments, t.last_date, t.last_from, 
+                "SELECT DISTINCT t.id, t.account_id, t.subject, t.participant_ids, t.message_count,
+                        t.unread_count, t.is_flagged, t.has_attachments, t.last_date, t.last_from,
                         t.triage_score, t.labels
                  FROM threads t
-                 JOIN messages m ON t.id = m.thread_id
-                 WHERE t.id IN ({}) AND m.mailbox_id = ?{}
+                 WHERE t.id IN ({}) AND EXISTS (
+                   SELECT 1 FROM messages m
+                   WHERE m.thread_id = t.id
+                     AND EXISTS (SELECT 1 FROM json_each(m.inbox_mailboxes) WHERE value = ?{})
+                 )
                  ORDER BY t.last_date DESC",
                 placeholders,
                 ids.len() + 1
@@ -1456,7 +1417,7 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
-            inbox_mailboxes: Vec::new(),
+            inbox_mailboxes: vec![mailbox_id.to_string()],
         };
         db.upsert_message(&build_message("msg-inbox", &inbox_thread.id, &inbox.id))
             .expect("inbox message");
@@ -1560,7 +1521,7 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
-            inbox_mailboxes: Vec::new(),
+            inbox_mailboxes: vec![inbox.id.clone()],
         };
         let read_message = Message {
             id: "msg-read".to_string(),
@@ -1582,7 +1543,7 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
-            inbox_mailboxes: Vec::new(),
+            inbox_mailboxes: vec![inbox.id.clone()],
         };
         db.upsert_message(&unread_message).expect("unread message");
         db.upsert_message(&read_message).expect("read message");
@@ -1701,7 +1662,7 @@ mod tests {
                 has_attachments: false,
                 triage_score: None,
                 ai_summary: None,
-                inbox_mailboxes: Vec::new(),
+                inbox_mailboxes: vec![mailbox_id.to_string()],
             })
             .expect("message");
         }
