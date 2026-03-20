@@ -469,6 +469,8 @@ async fn do_sync(
                     uid_validity: None,
                     uid_next: None,
                     last_synced_at: None,
+                    thread_count: 0,
+                    unread_count: 0,
                 })
         }
     };
@@ -1022,8 +1024,11 @@ pub async fn set_threads_read(
     let _ = session.logout().await;
 
     let db = db.lock().await;
-    db.set_threads_read_state(&thread_ids, request.read)
-        .map_err(|e: anyhow::Error| e.to_string())
+    let result = db.set_threads_read_state(&thread_ids, request.read)
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    db.refresh_mailbox_counts(&account.id)
+        .map_err(|e: anyhow::Error| e.to_string())?;
+    Ok(result)
 }
 
 #[tauri::command]

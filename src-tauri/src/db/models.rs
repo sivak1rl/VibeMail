@@ -23,6 +23,8 @@ pub struct Mailbox {
     pub uid_validity: Option<u32>,
     pub uid_next: Option<u32>,
     pub last_synced_at: Option<DateTime<Utc>>,
+    pub thread_count: u32,
+    pub unread_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

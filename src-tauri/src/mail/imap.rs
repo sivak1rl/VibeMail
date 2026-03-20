@@ -531,6 +531,10 @@ pub async fn persist_batch(
         "Persisted {} threads and {} messages",
         thread_count, msg_count
     );
+
+    // Refresh precomputed mailbox counts after batch insert
+    db_lock.refresh_mailbox_counts(&account.id)?;
+
     Ok(())
 }
 
@@ -551,6 +555,8 @@ pub async fn list_mailboxes(session: &mut ImapSession, account_id: &str) -> Resu
             uid_validity: None,
             uid_next: None,
             last_synced_at: None,
+            thread_count: 0,
+            unread_count: 0,
         })
         .collect();
     Ok(mailboxes)

@@ -114,6 +114,20 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         [],
     )?;
 
+    // Precomputed mailbox counts: avoid expensive correlated subqueries
+    // on every sidebar render.
+    let has_thread_count: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('mailboxes') WHERE name='thread_count'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_thread_count == 0 {
+        conn.execute_batch(
+            "ALTER TABLE mailboxes ADD COLUMN thread_count INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE mailboxes ADD COLUMN unread_count INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -139,6 +153,8 @@ CREATE TABLE IF NOT EXISTS mailboxes (
     uid_validity    INTEGER,
     uid_next        INTEGER,
     last_synced_at  INTEGER,
+    thread_count    INTEGER NOT NULL DEFAULT 0,
+    unread_count    INTEGER NOT NULL DEFAULT 0,
     UNIQUE(account_id, name)
     );
 

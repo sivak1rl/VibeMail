@@ -116,9 +116,9 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 
 ### Performance & Scale — DB Schema Refactor
 - [x] SQLite performance tuning — denormalized message_mailboxes join table, mmap, 32MB cache, NORMAL synchronous
-- [ ] Add `is_read`/`is_flagged` boolean columns on messages — replace `instr(flags, '\\Seen')` string searches with indexed column lookups
-- [ ] Batch state updates — replace N+1 per-message flag loops with single UPDATE statements using `is_read`/`is_flagged` columns
-- [ ] Precompute mailbox counts — add `thread_count`/`unread_count` columns on mailboxes, refresh after sync instead of correlated subqueries on every sidebar render
+- [x] Add `is_read`/`is_flagged` boolean columns on messages — replace `instr(flags, '\\Seen')` string searches with indexed column lookups
+- [x] Batch state updates — replace N+1 per-message flag loops with single UPDATE statements using `is_read`/`is_flagged` columns
+- [x] Precompute mailbox counts — add `thread_count`/`unread_count` columns on mailboxes, refresh after sync instead of correlated subqueries on every sidebar render
 - [ ] Add `thread_mailboxes` join table — indexed `(mailbox_id, thread_id)` to replace correlated EXISTS subquery in list_threads
 - [ ] Drop `inbox_mailboxes` JSON column — make `message_mailboxes` join table the sole source of truth, eliminate redundant JSON serialization on every upsert
 - [ ] Classify system folders — add `folder_role` column on mailboxes (`inbox`/`sent`/`trash`/`spam`/`drafts`/`all_mail`), replace 5x UPPER/LIKE pattern matching

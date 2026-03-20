@@ -66,6 +66,24 @@ impl Database {
         Ok(())
     }
 
+    /// Map a mailbox row (10 columns) to a Mailbox struct.
+    fn row_to_mailbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<Mailbox> {
+        Ok(Mailbox {
+            id: row.get(0)?,
+            account_id: row.get(1)?,
+            name: row.get(2)?,
+            delimiter: row.get(3)?,
+            flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
+            uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
+            uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
+            last_synced_at: row
+                .get::<_, Option<i64>>(7)?
+                .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+            thread_count: row.get::<_, i64>(8)? as u32,
+            unread_count: row.get::<_, i64>(9)? as u32,
+        })
+    }
+
     pub fn upsert_mailbox(&self, mailbox: &Mailbox) -> Result<()> {
         self.conn.execute(
             r#"INSERT INTO mailboxes (id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at)
@@ -87,25 +105,37 @@ impl Database {
         Ok(())
     }
 
+    /// Recompute thread_count and unread_count for all mailboxes of an account.
+    /// Uses the indexed message_mailboxes join table — fast even with large inboxes.
+    pub fn refresh_mailbox_counts(&self, account_id: &str) -> Result<()> {
+        self.conn.execute(
+            r#"UPDATE mailboxes SET
+                thread_count = COALESCE((
+                    SELECT COUNT(DISTINCT m.thread_id)
+                    FROM messages m
+                    JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = mailboxes.id
+                    WHERE m.account_id = mailboxes.account_id AND m.thread_id IS NOT NULL
+                ), 0),
+                unread_count = COALESCE((
+                    SELECT COUNT(DISTINCT m.thread_id)
+                    FROM messages m
+                    JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = mailboxes.id
+                    WHERE m.account_id = mailboxes.account_id AND m.thread_id IS NOT NULL AND m.is_read = 0
+                ), 0)
+               WHERE account_id = ?1"#,
+            [account_id],
+        )?;
+        Ok(())
+    }
+
     pub fn get_mailbox_by_name(&self, account_id: &str, name: &str) -> Result<Option<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at
+            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, thread_count, unread_count
              FROM mailboxes WHERE account_id=?1 AND name=?2",
         )?;
         let mut rows = stmt.query(rusqlite::params![account_id, name])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(Mailbox {
-                id: row.get(0)?,
-                account_id: row.get(1)?,
-                name: row.get(2)?,
-                delimiter: row.get(3)?,
-                flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
-                uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
-                uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-                last_synced_at: row
-                    .get::<_, Option<i64>>(7)?
-                    .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
-            }))
+            Ok(Some(Self::row_to_mailbox(row)?))
         } else {
             Ok(None)
         }
@@ -113,92 +143,37 @@ impl Database {
 
     pub fn list_mailboxes(&self, account_id: &str) -> Result<Vec<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at
+            r#"SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, thread_count, unread_count
                FROM mailboxes
                WHERE account_id=?1
                ORDER BY CASE WHEN UPPER(name) = 'INBOX' THEN 0 ELSE 1 END, name COLLATE NOCASE"#,
         )?;
         let mailboxes = stmt
-            .query_map([account_id], |row| {
-                Ok(Mailbox {
-                    id: row.get(0)?,
-                    account_id: row.get(1)?,
-                    name: row.get(2)?,
-                    delimiter: row.get(3)?,
-                    flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
-                    uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
-                    uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-                    last_synced_at: row
-                        .get::<_, Option<i64>>(7)?
-                        .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
-                })
-            })?
+            .query_map([account_id], |row| Self::row_to_mailbox(row))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(mailboxes)
     }
 
     pub fn list_mailboxes_with_counts(&self, account_id: &str) -> Result<Vec<MailboxStats>> {
-        let mut stmt = self.conn.prepare(
-            r#"SELECT mb.id, mb.account_id, mb.name, mb.delimiter, mb.flags, mb.uid_validity, mb.uid_next, mb.last_synced_at,
-               (SELECT COUNT(DISTINCT m.thread_id)
-                FROM messages m
-                JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = mb.id
-                WHERE m.account_id = mb.account_id
-                  AND m.thread_id IS NOT NULL
-               ) AS thread_count,
-               (SELECT COUNT(DISTINCT m.thread_id)
-                FROM messages m
-                JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = mb.id
-                WHERE m.account_id = mb.account_id
-                  AND m.thread_id IS NOT NULL
-                  AND m.is_read = 0
-               ) AS unread_count
-               FROM mailboxes mb
-               WHERE mb.account_id=?1
-               ORDER BY CASE WHEN UPPER(mb.name) = 'INBOX' THEN 0 ELSE 1 END, mb.name COLLATE NOCASE"#,
-        )?;
-        let mailboxes = stmt
-            .query_map([account_id], |row| {
-                Ok(MailboxStats {
-                    mailbox: Mailbox {
-                        id: row.get(0)?,
-                        account_id: row.get(1)?,
-                        name: row.get(2)?,
-                        delimiter: row.get(3)?,
-                        flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
-                        uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
-                        uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-                        last_synced_at: row
-                            .get::<_, Option<i64>>(7)?
-                            .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
-                    },
-                    thread_count: row.get::<_, i64>(8)? as u32,
-                    unread_count: row.get::<_, i64>(9)? as u32,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(mailboxes)
+        let mailboxes = self.list_mailboxes(account_id)?;
+        Ok(mailboxes
+            .into_iter()
+            .map(|mb| MailboxStats {
+                thread_count: mb.thread_count,
+                unread_count: mb.unread_count,
+                mailbox: mb,
+            })
+            .collect())
     }
 
     pub fn get_mailbox_by_id(&self, account_id: &str, mailbox_id: &str) -> Result<Option<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at
+            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, thread_count, unread_count
              FROM mailboxes WHERE account_id=?1 AND id=?2",
         )?;
         let mut rows = stmt.query(rusqlite::params![account_id, mailbox_id])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(Mailbox {
-                id: row.get(0)?,
-                account_id: row.get(1)?,
-                name: row.get(2)?,
-                delimiter: row.get(3)?,
-                flags: serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_default(),
-                uid_validity: row.get::<_, Option<i64>>(5)?.map(|v| v as u32),
-                uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
-                last_synced_at: row
-                    .get::<_, Option<i64>>(7)?
-                    .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
-            }))
+            Ok(Some(Self::row_to_mailbox(row)?))
         } else {
             Ok(None)
         }
@@ -1303,6 +1278,8 @@ mod tests {
                 uid_validity: None,
                 uid_next: None,
                 last_synced_at: None,
+                thread_count: 0,
+                unread_count: 0,
             })
             .expect("mailbox");
         }
@@ -1341,6 +1318,8 @@ mod tests {
             uid_validity: None,
             uid_next: None,
             last_synced_at: None,
+            thread_count: 0,
+            unread_count: 0,
         };
         let archive = Mailbox {
             id: "acc1:Archive".to_string(),
@@ -1351,6 +1330,8 @@ mod tests {
             uid_validity: None,
             uid_next: None,
             last_synced_at: None,
+            thread_count: 0,
+            unread_count: 0,
         };
         db.upsert_mailbox(&inbox).expect("inbox");
         db.upsert_mailbox(&archive).expect("archive");
@@ -1458,6 +1439,8 @@ mod tests {
             uid_validity: None,
             uid_next: None,
             last_synced_at: None,
+            thread_count: 0,
+            unread_count: 0,
         };
         db.upsert_mailbox(&inbox).expect("inbox");
 
@@ -1545,6 +1528,9 @@ mod tests {
         db.upsert_message(&unread_message).expect("unread message");
         db.upsert_message(&read_message).expect("read message");
 
+        db.refresh_mailbox_counts(&account.id)
+            .expect("refresh counts");
+
         let stats = db
             .list_mailboxes_with_counts(&account.id)
             .expect("mailbox stats");
@@ -1578,6 +1564,8 @@ mod tests {
             uid_validity: None,
             uid_next: None,
             last_synced_at: None,
+            thread_count: 0,
+            unread_count: 0,
         };
         let archive = Mailbox {
             id: "acc1:Archive".to_string(),
@@ -1588,6 +1576,8 @@ mod tests {
             uid_validity: None,
             uid_next: None,
             last_synced_at: None,
+            thread_count: 0,
+            unread_count: 0,
         };
         db.upsert_mailbox(&inbox).expect("inbox");
         db.upsert_mailbox(&archive).expect("archive");
