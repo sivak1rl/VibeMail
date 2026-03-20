@@ -206,13 +206,12 @@ impl Database {
     }
 
     pub fn upsert_message(&self, msg: &Message) -> Result<()> {
-        let inbox_mailboxes_json = serde_json::to_string(&msg.inbox_mailboxes)?;
         self.conn.execute(
             r#"INSERT INTO messages
                (id, account_id, mailbox_id, uid, message_id, thread_id, subject, "from", "to", cc,
                 date, body_text, body_html, references_ids, in_reply_to, flags, is_read, is_flagged,
-                has_attachments, triage_score, ai_summary, inbox_mailboxes)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
+                has_attachments, triage_score, ai_summary)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
                ON CONFLICT(id) DO UPDATE SET
                message_id=excluded.message_id, thread_id=excluded.thread_id,
                subject=excluded.subject, "from"=excluded."from", "to"=excluded."to",
@@ -223,7 +222,6 @@ impl Database {
                has_attachments=excluded.has_attachments,
                triage_score=COALESCE(excluded.triage_score, messages.triage_score),
                ai_summary=COALESCE(excluded.ai_summary, messages.ai_summary),
-               inbox_mailboxes=excluded.inbox_mailboxes,
                synced_at=unixepoch()"#,
             rusqlite::params![
                 msg.id,
@@ -247,11 +245,10 @@ impl Database {
                 msg.has_attachments as i64,
                 msg.triage_score,
                 msg.ai_summary,
-                inbox_mailboxes_json,
             ],
         )?;
 
-        // Keep denormalized join table in sync
+        // Sync message_mailboxes join table (source of truth for mailbox membership)
         self.conn.execute(
             "DELETE FROM message_mailboxes WHERE message_id = ?1",
             [&msg.id],
@@ -468,7 +465,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             r#"SELECT id, account_id, mailbox_id, uid, message_id, thread_id, subject,
                "from", "to", cc, date, body_text, body_html, references_ids, in_reply_to,
-               flags, is_read, is_flagged, has_attachments, triage_score, ai_summary, inbox_mailboxes
+               flags, is_read, is_flagged, has_attachments, triage_score, ai_summary
                FROM messages WHERE thread_id=?1 ORDER BY date ASC"#,
         )?;
         let messages = stmt
@@ -504,11 +501,7 @@ impl Database {
                     has_attachments: row.get::<_, i64>(18)? != 0,
                     triage_score: row.get(19)?,
                     ai_summary: row.get(20)?,
-                    inbox_mailboxes: row
-                        .get::<_, Option<String>>(21)?
-                        .as_deref()
-                        .and_then(|s| serde_json::from_str(s).ok())
-                        .unwrap_or_default(),
+                    inbox_mailboxes: Vec::new(),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
