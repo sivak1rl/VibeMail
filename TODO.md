@@ -122,7 +122,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [x] Add `thread_mailboxes` join table — indexed `(mailbox_id, thread_id)` to replace correlated EXISTS subquery in list_threads
 - [x] Drop `inbox_mailboxes` JSON column — make `message_mailboxes` join table the sole source of truth, eliminate redundant JSON serialization on every upsert
 - [x] Classify system folders — add `folder_role` column on mailboxes (`inbox`/`sent`/`trash`/`spam`/`drafts`/`all_mail`), replace 5x UPPER/LIKE pattern matching
-- [ ] Batch inserts in persist_batch — multi-row INSERT for message_mailboxes, wrap sync batches in explicit transactions
+- [x] Batch inserts in persist_batch — wrap sync batches in explicit transactions with rollback on error
 
 ### Performance & Scale — Other
 - [ ] SQLite WAL2 or move to DuckDB for analytics-heavy queries

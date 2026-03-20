@@ -490,53 +490,61 @@ pub async fn persist_batch(
     // 4. Build updated thread objects
     let updated_threads = threading::build_threads(all_thread_messages, &account.id);
 
-    // 5. Persist everything
+    // 5. Persist everything inside an explicit transaction for performance.
+    // Without this, each upsert auto-commits which is very slow with many messages.
     let db_lock = db.lock().await;
-    db_lock.upsert_mailbox(mailbox)?;
+    db_lock.conn.execute_batch("BEGIN")?;
 
-    let mut thread_count = 0;
-    let mut msg_count = 0;
+    let result = (|| -> Result<(usize, usize)> {
+        db_lock.upsert_mailbox(mailbox)?;
 
-    for thread in &updated_threads {
-        if let Err(e) = db_lock.upsert_thread(thread) {
-            println!(">>> DB ERROR: upsert_thread failed: {}", e);
-            return Err(e);
-        }
-        thread_count += 1;
-        if let Some(msgs) = &thread.messages {
-            for msg in msgs {
-                if let Err(e) = db_lock.upsert_message(msg) {
-                    println!(">>> DB ERROR: upsert_message failed: {}", e);
-                    return Err(e);
-                }
-                msg_count += 1;
-                // Only update attachments for messages that were in our current batch
-                if let Some((_, atts)) = batch.iter().find(|(m, _)| m.id == msg.id) {
-                    db_lock.delete_message_attachments(&msg.id)?;
-                    for att in atts {
-                        if let Err(e) = db_lock.upsert_attachment(att) {
-                            println!(">>> DB ERROR: upsert_attachment failed: {}", e);
-                            return Err(e);
+        let mut thread_count = 0;
+        let mut msg_count = 0;
+
+        for thread in &updated_threads {
+            db_lock.upsert_thread(thread)?;
+            thread_count += 1;
+            if let Some(msgs) = &thread.messages {
+                for msg in msgs {
+                    db_lock.upsert_message(msg)?;
+                    msg_count += 1;
+                    // Only update attachments for messages that were in our current batch
+                    if let Some((_, atts)) = batch.iter().find(|(m, _)| m.id == msg.id) {
+                        db_lock.delete_message_attachments(&msg.id)?;
+                        for att in atts {
+                            db_lock.upsert_attachment(att)?;
                         }
                     }
                 }
             }
         }
+
+        // Refresh denormalized tables inside the same transaction
+        db_lock.refresh_thread_mailboxes(&account.id)?;
+        db_lock.refresh_mailbox_counts(&account.id)?;
+
+        Ok((thread_count, msg_count))
+    })();
+
+    match result {
+        Ok((thread_count, msg_count)) => {
+            db_lock.conn.execute_batch("COMMIT")?;
+            println!(
+                ">>> DB: Successfully persisted {} threads and {} messages",
+                thread_count, msg_count
+            );
+            info!(
+                "Persisted {} threads and {} messages",
+                thread_count, msg_count
+            );
+            Ok(())
+        }
+        Err(e) => {
+            let _ = db_lock.conn.execute_batch("ROLLBACK");
+            println!(">>> DB ERROR: persist_batch failed: {}", e);
+            Err(e)
+        }
     }
-    println!(
-        ">>> DB: Successfully persisted {} threads and {} messages",
-        thread_count, msg_count
-    );
-    info!(
-        "Persisted {} threads and {} messages",
-        thread_count, msg_count
-    );
-
-    // Refresh denormalized tables after batch insert
-    db_lock.refresh_thread_mailboxes(&account.id)?;
-    db_lock.refresh_mailbox_counts(&account.id)?;
-
-    Ok(())
 }
 
 pub async fn list_mailboxes(session: &mut ImapSession, account_id: &str) -> Result<Vec<Mailbox>> {
