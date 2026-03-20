@@ -141,6 +141,30 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         )?;
     }
 
+    // Classify system folders: add folder_role for fast filtering without LIKE patterns.
+    let has_folder_role: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('mailboxes') WHERE name='folder_role'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_folder_role == 0 {
+        conn.execute(
+            "ALTER TABLE mailboxes ADD COLUMN folder_role TEXT",
+            [],
+        )?;
+        // Backfill from folder names
+        conn.execute_batch(
+            "UPDATE mailboxes SET folder_role = 'inbox' WHERE UPPER(name) = 'INBOX';
+             UPDATE mailboxes SET folder_role = 'sent' WHERE UPPER(name) LIKE '%SENT%' AND folder_role IS NULL;
+             UPDATE mailboxes SET folder_role = 'drafts' WHERE UPPER(name) LIKE '%DRAFT%' AND folder_role IS NULL;
+             UPDATE mailboxes SET folder_role = 'trash' WHERE UPPER(name) LIKE '%TRASH%' AND folder_role IS NULL;
+             UPDATE mailboxes SET folder_role = 'spam' WHERE (UPPER(name) LIKE '%SPAM%' OR UPPER(name) LIKE '%JUNK%') AND folder_role IS NULL;
+             UPDATE mailboxes SET folder_role = 'all_mail' WHERE UPPER(name) LIKE '%ALL MAIL%' AND folder_role IS NULL;
+             UPDATE mailboxes SET folder_role = 'starred' WHERE UPPER(name) LIKE '%STAR%' AND folder_role IS NULL;
+             UPDATE mailboxes SET folder_role = 'important' WHERE UPPER(name) LIKE '%IMPORTANT%' AND folder_role IS NULL;",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -168,6 +192,7 @@ CREATE TABLE IF NOT EXISTS mailboxes (
     last_synced_at  INTEGER,
     thread_count    INTEGER NOT NULL DEFAULT 0,
     unread_count    INTEGER NOT NULL DEFAULT 0,
+    folder_role     TEXT,               -- inbox|sent|drafts|trash|spam|all_mail|starred|important
     UNIQUE(account_id, name)
     );
 

@@ -558,9 +558,34 @@ pub async fn list_mailboxes(session: &mut ImapSession, account_id: &str) -> Resu
             last_synced_at: None,
             thread_count: 0,
             unread_count: 0,
+            folder_role: detect_folder_role(b.name()),
         })
         .collect();
     Ok(mailboxes)
+}
+
+/// Derive a folder_role from the mailbox name.
+fn detect_folder_role(name: &str) -> Option<String> {
+    let upper = name.to_uppercase();
+    if upper == "INBOX" {
+        Some("inbox".to_string())
+    } else if upper.contains("SENT") {
+        Some("sent".to_string())
+    } else if upper.contains("DRAFT") {
+        Some("drafts".to_string())
+    } else if upper.contains("TRASH") {
+        Some("trash".to_string())
+    } else if upper.contains("SPAM") || upper.contains("JUNK") {
+        Some("spam".to_string())
+    } else if upper.contains("ALL MAIL") {
+        Some("all_mail".to_string())
+    } else if upper.contains("STAR") {
+        Some("starred".to_string())
+    } else if upper.contains("IMPORTANT") {
+        Some("important".to_string())
+    } else {
+        None
+    }
 }
 
 /// Fetch ALL X-GM-LABELS for the given UID range, returning raw label strings per UID.

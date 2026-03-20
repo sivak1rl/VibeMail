@@ -66,7 +66,7 @@ impl Database {
         Ok(())
     }
 
-    /// Map a mailbox row (10 columns) to a Mailbox struct.
+    /// Map a mailbox row (11 columns) to a Mailbox struct.
     fn row_to_mailbox(row: &rusqlite::Row<'_>) -> rusqlite::Result<Mailbox> {
         Ok(Mailbox {
             id: row.get(0)?,
@@ -81,25 +81,28 @@ impl Database {
                 .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
             thread_count: row.get::<_, i64>(8)? as u32,
             unread_count: row.get::<_, i64>(9)? as u32,
+            folder_role: row.get(10)?,
         })
     }
 
     pub fn upsert_mailbox(&self, mailbox: &Mailbox) -> Result<()> {
         self.conn.execute(
-            r#"INSERT INTO mailboxes (id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            r#"INSERT INTO mailboxes (id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, folder_role)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                ON CONFLICT(id) DO UPDATE SET
-               flags=excluded.flags, 
+               flags=excluded.flags,
                delimiter=excluded.delimiter,
-               uid_validity=excluded.uid_validity, 
+               uid_validity=excluded.uid_validity,
                uid_next=excluded.uid_next,
-               last_synced_at=excluded.last_synced_at"#,
+               last_synced_at=excluded.last_synced_at,
+               folder_role=COALESCE(excluded.folder_role, mailboxes.folder_role)"#,
             rusqlite::params![
                 mailbox.id, mailbox.account_id, mailbox.name, mailbox.delimiter,
                 serde_json::to_string(&mailbox.flags)?,
                 mailbox.uid_validity.map(|v| v as i64),
                 mailbox.uid_next.map(|v| v as i64),
                 mailbox.last_synced_at.map(|d| d.timestamp()),
+                mailbox.folder_role,
             ],
         )?;
         Ok(())
@@ -148,7 +151,7 @@ impl Database {
 
     pub fn get_mailbox_by_name(&self, account_id: &str, name: &str) -> Result<Option<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, thread_count, unread_count
+            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, thread_count, unread_count, folder_role
              FROM mailboxes WHERE account_id=?1 AND name=?2",
         )?;
         let mut rows = stmt.query(rusqlite::params![account_id, name])?;
@@ -161,10 +164,10 @@ impl Database {
 
     pub fn list_mailboxes(&self, account_id: &str) -> Result<Vec<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, thread_count, unread_count
+            r#"SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, thread_count, unread_count, folder_role
                FROM mailboxes
                WHERE account_id=?1
-               ORDER BY CASE WHEN UPPER(name) = 'INBOX' THEN 0 ELSE 1 END, name COLLATE NOCASE"#,
+               ORDER BY CASE WHEN folder_role = 'inbox' THEN 0 ELSE 1 END, name COLLATE NOCASE"#,
         )?;
         let mailboxes = stmt
             .query_map([account_id], |row| Self::row_to_mailbox(row))?
@@ -186,7 +189,7 @@ impl Database {
 
     pub fn get_mailbox_by_id(&self, account_id: &str, mailbox_id: &str) -> Result<Option<Mailbox>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, thread_count, unread_count
+            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, thread_count, unread_count, folder_role
              FROM mailboxes WHERE account_id=?1 AND id=?2",
         )?;
         let mut rows = stmt.query(rusqlite::params![account_id, mailbox_id])?;
@@ -367,12 +370,9 @@ impl Database {
                FROM threads WHERE account_id=?1 AND last_date >= ?2
                AND EXISTS (
                  SELECT 1 FROM thread_mailboxes tm
+                 JOIN mailboxes mb ON mb.id = tm.mailbox_id
                  WHERE tm.thread_id = threads.id
-                   AND UPPER(tm.mailbox_id) NOT LIKE '%TRASH%'
-                   AND UPPER(tm.mailbox_id) NOT LIKE '%SPAM%'
-                   AND UPPER(tm.mailbox_id) NOT LIKE '%JUNK%'
-                   AND UPPER(tm.mailbox_id) NOT LIKE '%ALL MAIL%'
-                   AND UPPER(tm.mailbox_id) NOT LIKE '%DRAFT%'
+                   AND COALESCE(mb.folder_role, '') NOT IN ('trash', 'spam', 'all_mail', 'drafts')
                )
                ORDER BY COALESCE(triage_score, 0.5) DESC, last_date DESC LIMIT ?3"#,
         )?;
@@ -417,14 +417,10 @@ impl Database {
         // Shared filter: exclude threads that only exist in system folders.
         let system_folder_filter = r#"
             AND EXISTS (
-              SELECT 1 FROM messages m
-              JOIN message_mailboxes mm ON mm.message_id = m.id
-              WHERE m.thread_id = t.id
-                AND UPPER(mm.mailbox_id) NOT LIKE '%TRASH%'
-                AND UPPER(mm.mailbox_id) NOT LIKE '%SPAM%'
-                AND UPPER(mm.mailbox_id) NOT LIKE '%JUNK%'
-                AND UPPER(mm.mailbox_id) NOT LIKE '%ALL MAIL%'
-                AND UPPER(mm.mailbox_id) NOT LIKE '%DRAFT%'
+              SELECT 1 FROM thread_mailboxes tm
+              JOIN mailboxes mb ON mb.id = tm.mailbox_id
+              WHERE tm.thread_id = t.id
+                AND COALESCE(mb.folder_role, '') NOT IN ('trash', 'spam', 'all_mail', 'drafts')
             )"#;
 
         let total: i64 = self.conn.query_row(
@@ -1283,6 +1279,7 @@ mod tests {
                 last_synced_at: None,
                 thread_count: 0,
                 unread_count: 0,
+                folder_role: if name == "INBOX" { Some("inbox".to_string()) } else { None },
             })
             .expect("mailbox");
         }
@@ -1323,6 +1320,7 @@ mod tests {
             last_synced_at: None,
             thread_count: 0,
             unread_count: 0,
+            folder_role: None,
         };
         let archive = Mailbox {
             id: "acc1:Archive".to_string(),
@@ -1335,6 +1333,7 @@ mod tests {
             last_synced_at: None,
             thread_count: 0,
             unread_count: 0,
+            folder_role: None,
         };
         db.upsert_mailbox(&inbox).expect("inbox");
         db.upsert_mailbox(&archive).expect("archive");
@@ -1447,6 +1446,7 @@ mod tests {
             last_synced_at: None,
             thread_count: 0,
             unread_count: 0,
+            folder_role: None,
         };
         db.upsert_mailbox(&inbox).expect("inbox");
 
@@ -1574,6 +1574,7 @@ mod tests {
             last_synced_at: None,
             thread_count: 0,
             unread_count: 0,
+            folder_role: None,
         };
         let archive = Mailbox {
             id: "acc1:Archive".to_string(),
@@ -1586,6 +1587,7 @@ mod tests {
             last_synced_at: None,
             thread_count: 0,
             unread_count: 0,
+            folder_role: None,
         };
         db.upsert_mailbox(&inbox).expect("inbox");
         db.upsert_mailbox(&archive).expect("archive");

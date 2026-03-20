@@ -471,6 +471,7 @@ async fn do_sync(
                     last_synced_at: None,
                     thread_count: 0,
                     unread_count: 0,
+                    folder_role: Some("inbox".to_string()),
                 })
         }
     };

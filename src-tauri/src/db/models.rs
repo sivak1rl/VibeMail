@@ -25,6 +25,7 @@ pub struct Mailbox {
     pub last_synced_at: Option<DateTime<Utc>>,
     pub thread_count: u32,
     pub unread_count: u32,
+    pub folder_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
