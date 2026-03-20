@@ -106,23 +106,41 @@ impl Database {
     }
 
     /// Recompute thread_count and unread_count for all mailboxes of an account.
-    /// Uses the indexed message_mailboxes join table — fast even with large inboxes.
+    /// Uses the indexed thread_mailboxes join table — fast even with large inboxes.
     pub fn refresh_mailbox_counts(&self, account_id: &str) -> Result<()> {
         self.conn.execute(
             r#"UPDATE mailboxes SET
                 thread_count = COALESCE((
-                    SELECT COUNT(DISTINCT m.thread_id)
-                    FROM messages m
-                    JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = mailboxes.id
-                    WHERE m.account_id = mailboxes.account_id AND m.thread_id IS NOT NULL
+                    SELECT COUNT(*) FROM thread_mailboxes tm
+                    WHERE tm.mailbox_id = mailboxes.id
                 ), 0),
                 unread_count = COALESCE((
-                    SELECT COUNT(DISTINCT m.thread_id)
-                    FROM messages m
-                    JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = mailboxes.id
-                    WHERE m.account_id = mailboxes.account_id AND m.thread_id IS NOT NULL AND m.is_read = 0
+                    SELECT COUNT(*) FROM thread_mailboxes tm
+                    JOIN threads t ON t.id = tm.thread_id
+                    WHERE tm.mailbox_id = mailboxes.id AND t.unread_count > 0
                 ), 0)
                WHERE account_id = ?1"#,
+            [account_id],
+        )?;
+        Ok(())
+    }
+
+    /// Rebuild the thread_mailboxes join table for an account.
+    /// Derived from messages + message_mailboxes: a thread belongs to a mailbox
+    /// if any of its messages does.
+    pub fn refresh_thread_mailboxes(&self, account_id: &str) -> Result<()> {
+        self.conn.execute(
+            r#"DELETE FROM thread_mailboxes WHERE thread_id IN (
+                SELECT id FROM threads WHERE account_id = ?1
+            )"#,
+            [account_id],
+        )?;
+        self.conn.execute(
+            r#"INSERT OR IGNORE INTO thread_mailboxes (thread_id, mailbox_id)
+               SELECT DISTINCT m.thread_id, mm.mailbox_id
+               FROM messages m
+               JOIN message_mailboxes mm ON mm.message_id = m.id
+               WHERE m.account_id = ?1 AND m.thread_id IS NOT NULL"#,
             [account_id],
         )?;
         Ok(())
@@ -316,12 +334,8 @@ impl Database {
                 r#"SELECT t.id, t.account_id, t.subject, t.participant_ids, t.message_count,
                    t.unread_count, t.is_flagged, t.has_attachments, t.last_date, t.last_from, t.triage_score, t.labels
                    FROM threads t
+                   JOIN thread_mailboxes tm ON tm.thread_id = t.id AND tm.mailbox_id = ?2
                    WHERE t.account_id=?1
-                     AND EXISTS (
-                       SELECT 1 FROM messages m
-                       JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = ?2
-                       WHERE m.thread_id = t.id
-                     )
                    ORDER BY t.last_date DESC LIMIT ?3 OFFSET ?4"#,
             )?;
             let rows = stmt.query_map(
@@ -355,14 +369,13 @@ impl Database {
                is_flagged, has_attachments, last_date, last_from, triage_score, labels
                FROM threads WHERE account_id=?1 AND last_date >= ?2
                AND EXISTS (
-                 SELECT 1 FROM messages m
-                 JOIN message_mailboxes mm ON mm.message_id = m.id
-                 WHERE m.thread_id = threads.id
-                   AND UPPER(mm.mailbox_id) NOT LIKE '%TRASH%'
-                   AND UPPER(mm.mailbox_id) NOT LIKE '%SPAM%'
-                   AND UPPER(mm.mailbox_id) NOT LIKE '%JUNK%'
-                   AND UPPER(mm.mailbox_id) NOT LIKE '%ALL MAIL%'
-                   AND UPPER(mm.mailbox_id) NOT LIKE '%DRAFT%'
+                 SELECT 1 FROM thread_mailboxes tm
+                 WHERE tm.thread_id = threads.id
+                   AND UPPER(tm.mailbox_id) NOT LIKE '%TRASH%'
+                   AND UPPER(tm.mailbox_id) NOT LIKE '%SPAM%'
+                   AND UPPER(tm.mailbox_id) NOT LIKE '%JUNK%'
+                   AND UPPER(tm.mailbox_id) NOT LIKE '%ALL MAIL%'
+                   AND UPPER(tm.mailbox_id) NOT LIKE '%DRAFT%'
                )
                ORDER BY COALESCE(triage_score, 0.5) DESC, last_date DESC LIMIT ?3"#,
         )?;
@@ -840,14 +853,11 @@ impl Database {
                         t.unread_count, t.is_flagged, t.has_attachments, t.last_date, t.last_from,
                         t.triage_score, t.labels
                  FROM threads t
-                 WHERE t.id IN ({}) AND EXISTS (
-                   SELECT 1 FROM messages m
-                   JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = ?{}
-                   WHERE m.thread_id = t.id
-                 )
+                 JOIN thread_mailboxes tm ON tm.thread_id = t.id AND tm.mailbox_id = ?{}
+                 WHERE t.id IN ({})
                  ORDER BY t.last_date DESC",
-                placeholders,
-                ids.len() + 1
+                ids.len() + 1,
+                placeholders
             )
         } else {
             format!(
@@ -1402,6 +1412,9 @@ mod tests {
         ))
         .expect("archive message");
 
+        db.refresh_thread_mailboxes(&account.id)
+            .expect("refresh thread mailboxes");
+
         let inbox_threads = db
             .list_threads(&account.id, Some(&inbox.id), 50, 0)
             .expect("filtered inbox threads");
@@ -1528,6 +1541,8 @@ mod tests {
         db.upsert_message(&unread_message).expect("unread message");
         db.upsert_message(&read_message).expect("read message");
 
+        db.refresh_thread_mailboxes(&account.id)
+            .expect("refresh thread mailboxes");
         db.refresh_mailbox_counts(&account.id)
             .expect("refresh counts");
 
@@ -1655,6 +1670,9 @@ mod tests {
             })
             .expect("message");
         }
+
+        db.refresh_thread_mailboxes(&account.id)
+            .expect("refresh thread mailboxes");
 
         let ids = vec![inbox_thread.id.clone(), archive_thread.id.clone()];
         let filtered = db

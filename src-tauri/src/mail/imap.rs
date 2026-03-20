@@ -532,7 +532,8 @@ pub async fn persist_batch(
         thread_count, msg_count
     );
 
-    // Refresh precomputed mailbox counts after batch insert
+    // Refresh denormalized tables after batch insert
+    db_lock.refresh_thread_mailboxes(&account.id)?;
     db_lock.refresh_mailbox_counts(&account.id)?;
 
     Ok(())

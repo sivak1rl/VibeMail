@@ -114,6 +114,19 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         [],
     )?;
 
+    // Denormalized thread↔mailbox join table for fast thread-by-mailbox lookups.
+    // Replaces EXISTS(SELECT 1 FROM messages JOIN message_mailboxes ...) in hot-path queries.
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS thread_mailboxes (
+            thread_id   TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+            mailbox_id  TEXT NOT NULL,
+            PRIMARY KEY (thread_id, mailbox_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_thrmb_mailbox_thread ON thread_mailboxes(mailbox_id, thread_id);
+        "#,
+    )?;
+
     // Precomputed mailbox counts: avoid expensive correlated subqueries
     // on every sidebar render.
     let has_thread_count: i64 = conn.query_row(
