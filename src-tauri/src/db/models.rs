@@ -49,6 +49,8 @@ pub struct Message {
     pub references_ids: Vec<String>,
     pub in_reply_to: Option<String>,
     pub flags: Vec<String>,
+    pub is_read: bool,
+    pub is_flagged: bool,
     pub has_attachments: bool,
     pub triage_score: Option<f64>,
     pub ai_summary: Option<String>,

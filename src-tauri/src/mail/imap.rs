@@ -396,6 +396,8 @@ pub fn parse_fetches(
                     .map(|f| flag_to_string(&f))
                     .filter(|s| !s.is_empty())
                     .collect();
+                msg.is_read = msg.flags.iter().any(|f| f == "\\Seen");
+                msg.is_flagged = msg.flags.iter().any(|f| f == "\\Flagged");
                 if let Some(raw_labels) = gmail_labels.get(&uid) {
                     println!(">>> GMAIL LABELS uid={}: {:?}", uid, raw_labels);
                     // VibeMail/* labels → append to flags (existing categorisation system)

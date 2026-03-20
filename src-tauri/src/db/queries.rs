@@ -151,7 +151,7 @@ impl Database {
                 JOIN message_mailboxes mm ON mm.message_id = m.id AND mm.mailbox_id = mb.id
                 WHERE m.account_id = mb.account_id
                   AND m.thread_id IS NOT NULL
-                  AND instr(COALESCE(m.flags, ''), '\Seen') = 0
+                  AND m.is_read = 0
                ) AS unread_count
                FROM mailboxes mb
                WHERE mb.account_id=?1
@@ -217,15 +217,16 @@ impl Database {
         self.conn.execute(
             r#"INSERT INTO messages
                (id, account_id, mailbox_id, uid, message_id, thread_id, subject, "from", "to", cc,
-                date, body_text, body_html, references_ids, in_reply_to, flags, has_attachments,
-                triage_score, ai_summary, inbox_mailboxes)
-               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)
+                date, body_text, body_html, references_ids, in_reply_to, flags, is_read, is_flagged,
+                has_attachments, triage_score, ai_summary, inbox_mailboxes)
+               VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)
                ON CONFLICT(id) DO UPDATE SET
                message_id=excluded.message_id, thread_id=excluded.thread_id,
                subject=excluded.subject, "from"=excluded."from", "to"=excluded."to",
                cc=excluded.cc, date=excluded.date, body_text=excluded.body_text,
                body_html=excluded.body_html, references_ids=excluded.references_ids,
                in_reply_to=excluded.in_reply_to, flags=excluded.flags,
+               is_read=excluded.is_read, is_flagged=excluded.is_flagged,
                has_attachments=excluded.has_attachments,
                triage_score=COALESCE(excluded.triage_score, messages.triage_score),
                ai_summary=COALESCE(excluded.ai_summary, messages.ai_summary),
@@ -248,6 +249,8 @@ impl Database {
                 serde_json::to_string(&msg.references_ids)?,
                 msg.in_reply_to,
                 serde_json::to_string(&msg.flags)?,
+                msg.is_read as i64,
+                msg.is_flagged as i64,
                 msg.has_attachments as i64,
                 msg.triage_score,
                 msg.ai_summary,
@@ -477,7 +480,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             r#"SELECT id, account_id, mailbox_id, uid, message_id, thread_id, subject,
                "from", "to", cc, date, body_text, body_html, references_ids, in_reply_to,
-               flags, has_attachments, triage_score, ai_summary, inbox_mailboxes
+               flags, is_read, is_flagged, has_attachments, triage_score, ai_summary, inbox_mailboxes
                FROM messages WHERE thread_id=?1 ORDER BY date ASC"#,
         )?;
         let messages = stmt
@@ -508,11 +511,13 @@ impl Database {
                     in_reply_to: row.get(14)?,
                     flags: serde_json::from_str(&row.get::<_, String>(15).unwrap_or_default())
                         .unwrap_or_default(),
-                    has_attachments: row.get::<_, i64>(16)? != 0,
-                    triage_score: row.get(17)?,
-                    ai_summary: row.get(18)?,
+                    is_read: row.get::<_, i64>(16)? != 0,
+                    is_flagged: row.get::<_, i64>(17)? != 0,
+                    has_attachments: row.get::<_, i64>(18)? != 0,
+                    triage_score: row.get(19)?,
+                    ai_summary: row.get(20)?,
                     inbox_mailboxes: row
-                        .get::<_, Option<String>>(19)?
+                        .get::<_, Option<String>>(21)?
                         .as_deref()
                         .and_then(|s| serde_json::from_str(s).ok())
                         .unwrap_or_default(),
@@ -667,36 +672,24 @@ impl Database {
     }
 
     pub fn set_thread_read_state(&self, thread_id: &str, read: bool) -> Result<()> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, flags FROM messages WHERE thread_id=?1")?;
-        let messages = stmt
-            .query_map([thread_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        for (message_id, flags_raw) in messages {
-            let mut flags: Vec<String> = serde_json::from_str(&flags_raw).unwrap_or_default();
-            let has_seen = flags.iter().any(|flag| flag == "\\Seen");
-
-            if read && !has_seen {
-                flags.push("\\Seen".to_string());
-            } else if !read && has_seen {
-                flags.retain(|flag| flag != "\\Seen");
-            }
-
-            self.conn.execute(
-                "UPDATE messages SET flags=?1 WHERE id=?2",
-                rusqlite::params![serde_json::to_string(&flags)?, message_id],
-            )?;
-        }
-
+        // Batch update: set is_read + sync flags JSON in one pass
         self.conn.execute(
-            "UPDATE threads SET unread_count=(
-                SELECT COUNT(*) FROM messages
-                WHERE thread_id=?1 AND instr(COALESCE(flags, ''), '\\Seen') = 0
-            ) WHERE id=?1",
+            if read {
+                "UPDATE messages SET is_read = 1,
+                 flags = CASE WHEN instr(COALESCE(flags, ''), '\\Seen') = 0
+                   THEN json_insert(COALESCE(flags, '[]'), '$[#]', '\\Seen') ELSE flags END
+                 WHERE thread_id = ?1"
+            } else {
+                "UPDATE messages SET is_read = 0,
+                 flags = REPLACE(REPLACE(flags, ',\"\\\\Seen\"', ''), '\"\\\\Seen\",', '')
+                 WHERE thread_id = ?1"
+            },
+            [thread_id],
+        )?;
+        self.conn.execute(
+            "UPDATE threads SET unread_count = (
+                SELECT COUNT(*) FROM messages WHERE thread_id = ?1 AND is_read = 0
+            ) WHERE id = ?1",
             [thread_id],
         )?;
         Ok(())
@@ -710,33 +703,22 @@ impl Database {
     }
 
     pub fn set_thread_flagged_state(&self, thread_id: &str, flagged: bool) -> Result<()> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, flags FROM messages WHERE thread_id=?1")?;
-        let messages = stmt
-            .query_map([thread_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        for (message_id, flags_raw) in messages {
-            let mut flags: Vec<String> = serde_json::from_str(&flags_raw).unwrap_or_default();
-            let has_flagged = flags.iter().any(|flag| flag == "\\Flagged");
-
-            if flagged && !has_flagged {
-                flags.push("\\Flagged".to_string());
-            } else if !flagged && has_flagged {
-                flags.retain(|flag| flag != "\\Flagged");
-            }
-
-            self.conn.execute(
-                "UPDATE messages SET flags=?1 WHERE id=?2",
-                rusqlite::params![serde_json::to_string(&flags)?, message_id],
-            )?;
-        }
-
+        // Batch update: set is_flagged + sync flags JSON in one pass
         self.conn.execute(
-            "UPDATE threads SET is_flagged=?1 WHERE id=?2",
+            if flagged {
+                "UPDATE messages SET is_flagged = 1,
+                 flags = CASE WHEN instr(COALESCE(flags, ''), '\\Flagged') = 0
+                   THEN json_insert(COALESCE(flags, '[]'), '$[#]', '\\Flagged') ELSE flags END
+                 WHERE thread_id = ?1"
+            } else {
+                "UPDATE messages SET is_flagged = 0,
+                 flags = REPLACE(REPLACE(flags, ',\"\\\\Flagged\"', ''), '\"\\\\Flagged\",', '')
+                 WHERE thread_id = ?1"
+            },
+            [thread_id],
+        )?;
+        self.conn.execute(
+            "UPDATE threads SET is_flagged = ?1 WHERE id = ?2",
             rusqlite::params![flagged as i64, thread_id],
         )?;
         Ok(())
@@ -830,9 +812,9 @@ impl Database {
 
         if let Some(unread) = filters.unread {
             if unread {
-                sql.push_str("AND instr(COALESCE(m.flags, ''), '\\Seen') = 0 ");
+                sql.push_str("AND m.is_read = 0 ");
             } else {
-                sql.push_str("AND instr(COALESCE(m.flags, ''), '\\Seen') > 0 ");
+                sql.push_str("AND m.is_read = 1 ");
             }
         }
 
@@ -1423,6 +1405,8 @@ mod tests {
             references_ids: Vec::new(),
             in_reply_to: None,
             flags: Vec::new(),
+            is_read: false,
+            is_flagged: false,
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
@@ -1527,6 +1511,8 @@ mod tests {
             references_ids: Vec::new(),
             in_reply_to: None,
             flags: Vec::new(),
+            is_read: false,
+            is_flagged: false,
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
@@ -1549,6 +1535,8 @@ mod tests {
             references_ids: Vec::new(),
             in_reply_to: None,
             flags: vec!["\\Seen".to_string()],
+            is_read: true,
+            is_flagged: false,
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
@@ -1668,6 +1656,8 @@ mod tests {
                 references_ids: Vec::new(),
                 in_reply_to: None,
                 flags: Vec::new(),
+                is_read: false,
+                is_flagged: false,
                 has_attachments: false,
                 triage_score: None,
                 ai_summary: None,

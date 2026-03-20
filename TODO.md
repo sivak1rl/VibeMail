@@ -2,7 +2,7 @@
 
 ## Current State (MVP)
 
-Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newest-first), SQLite storage with FTS5, dark-themed inbox/thread view, compose editor, and AI provider scaffolding (Ollama + OpenAI-compatible). Outlook OAuth and generic IMAP also supported.
+Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newest-first), SQLite storage with FTS5, dark-themed inbox/thread view, compose editor, and AI provider scaffolding (Ollama + OpenAI-compatible). Outlook OAuth and generic IMAP also supported. Gmail syncs exclusively from [Gmail]/All Mail using X-GM-LABELS for folder membership. Email roundup digest available as a standalone window with inline AI actions.
 
 ---
 
@@ -16,6 +16,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [x] Flag sync — mark read/unread, star/flag changes propagated back to server
 - [x] Sliding sync window (only fetch mail since last sync)
 - [x] Historical mail fetching (targeted older mail fetch from server)
+- [x] Gmail All Mail sync — single-pass sync via [Gmail]/All Mail with X-GM-LABELS for folder membership
 - [ ] Detect and handle token revocation gracefully (re-prompt OAuth)
 
 ### UI/UX
@@ -76,7 +77,8 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Auto-triage on sync — score every new thread
 - [ ] Focus inbox: separate "Important" and "Other" tabs
 - [ ] Custom triage rules (always important: boss@company.com)
-- [ ] Daily digest — "Here's what matters today" summary
+- [x] Email roundup digest — AI-generated summary with stats, narrative, and top threads in a dedicated window
+- [x] Roundup action buttons — open, reply, summarize, and label threads inline from the roundup panel
 - [ ] Snooze: hide thread until a specified time
 
 ### Action Extraction
@@ -112,7 +114,17 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Privacy mode — strip tracking pixels, block remote images by default
 - [ ] Local-only mode — all data stays on device, no cloud AI
 
-### Performance & Scale
+### Performance & Scale — DB Schema Refactor
+- [x] SQLite performance tuning — denormalized message_mailboxes join table, mmap, 32MB cache, NORMAL synchronous
+- [ ] Add `is_read`/`is_flagged` boolean columns on messages — replace `instr(flags, '\\Seen')` string searches with indexed column lookups
+- [ ] Batch state updates — replace N+1 per-message flag loops with single UPDATE statements using `is_read`/`is_flagged` columns
+- [ ] Precompute mailbox counts — add `thread_count`/`unread_count` columns on mailboxes, refresh after sync instead of correlated subqueries on every sidebar render
+- [ ] Add `thread_mailboxes` join table — indexed `(mailbox_id, thread_id)` to replace correlated EXISTS subquery in list_threads
+- [ ] Drop `inbox_mailboxes` JSON column — make `message_mailboxes` join table the sole source of truth, eliminate redundant JSON serialization on every upsert
+- [ ] Classify system folders — add `folder_role` column on mailboxes (`inbox`/`sent`/`trash`/`spam`/`drafts`/`all_mail`), replace 5x UPPER/LIKE pattern matching
+- [ ] Batch inserts in persist_batch — multi-row INSERT for message_mailboxes, wrap sync batches in explicit transactions
+
+### Performance & Scale — Other
 - [ ] SQLite WAL2 or move to DuckDB for analytics-heavy queries
 - [ ] Incremental Tantivy index updates (currently rebuilds)
 - [ ] Message body lazy-loading (fetch on demand, not on sync)
@@ -149,7 +161,8 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [ ] Remove unused `StartOAuthRequest` struct
 - [x] Remove unused `list_mailboxes` function or wire it into UI
 - [x] Proper error boundaries in React (catch panics gracefully)
-- [ ] Structured logging with log levels (replace remaining eprintln)
+- [ ] Structured logging with log levels (replace remaining println/eprintln debug statements)
+- [ ] Remove Gmail label debug println! statements from imap.rs
 - [ ] Rate limiting on token refresh (don't refresh on every IMAP connect)
 - [ ] Connection pooling — reuse IMAP sessions across syncs
 - [ ] Proper IMAP LOGOUT on app quit

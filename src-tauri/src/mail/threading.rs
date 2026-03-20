@@ -129,11 +129,9 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
             .map(|a| a.email.clone());
         let unread_count = thread_messages
             .iter()
-            .filter(|m| !m.flags.iter().any(|f| f == "\\Seen"))
+            .filter(|m| !m.is_read)
             .count() as u32;
-        let is_flagged = thread_messages
-            .iter()
-            .any(|m| m.flags.iter().any(|f| f == "\\Flagged"));
+        let is_flagged = thread_messages.iter().any(|m| m.is_flagged);
         let has_attachments = thread_messages.iter().any(|m| m.has_attachments);
 
         let mut participants: Vec<_> = thread_messages
@@ -242,6 +240,8 @@ mod tests {
             references_ids: refs.into_iter().map(|r| format!("<{}>", r)).collect(),
             in_reply_to: irt.map(|r| format!("<{}>", r)),
             flags: vec![],
+            is_read: false,
+            is_flagged: false,
             has_attachments: false,
             triage_score: None,
             ai_summary: None,

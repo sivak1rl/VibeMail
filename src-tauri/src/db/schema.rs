@@ -68,6 +68,29 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         [],
     )?;
 
+    // is_read / is_flagged: denormalized booleans for fast filtering.
+    // Replaces instr(flags, '\\Seen') string searches in hot-path queries.
+    let has_is_read: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('messages') WHERE name='is_read'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_is_read == 0 {
+        conn.execute_batch(
+            "ALTER TABLE messages ADD COLUMN is_read INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE messages ADD COLUMN is_flagged INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        // Backfill from existing flags JSON
+        conn.execute(
+            "UPDATE messages SET is_read = 1 WHERE instr(COALESCE(flags, ''), '\\Seen') > 0",
+            [],
+        )?;
+        conn.execute(
+            "UPDATE messages SET is_flagged = 1 WHERE instr(COALESCE(flags, ''), '\\Flagged') > 0",
+            [],
+        )?;
+    }
+
     // Denormalized join table for fast mailbox→message lookups.
     // Replaces json_each(inbox_mailboxes) in hot-path queries.
     conn.execute_batch(
@@ -137,6 +160,8 @@ CREATE TABLE IF NOT EXISTS messages (
     references_ids  TEXT,                   -- JSON array of Message-IDs
     in_reply_to     TEXT,
     flags           TEXT,                   -- JSON array: \Seen, \Flagged, etc.
+    is_read         INTEGER NOT NULL DEFAULT 0,
+    is_flagged      INTEGER NOT NULL DEFAULT 0,
     has_attachments INTEGER NOT NULL DEFAULT 0,
     triage_score    REAL,                   -- 0.0–1.0, higher = more important
     ai_summary      TEXT,
@@ -147,6 +172,8 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_messages_account_date ON messages(account_id, date DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_message_id ON messages(message_id);
+CREATE INDEX IF NOT EXISTS idx_messages_thread_read ON messages(thread_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_messages_thread_flagged ON messages(thread_id, is_flagged);
 
 CREATE TABLE IF NOT EXISTS threads (
     id              TEXT PRIMARY KEY,
