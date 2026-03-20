@@ -128,6 +128,21 @@ impl Database {
         Ok(())
     }
 
+    /// Delete thread rows that have no messages pointing at them.
+    /// This happens when re-threading merges conversations: messages move
+    /// to a new thread_id but the old thread row is never removed.
+    pub fn delete_orphaned_threads(&self, account_id: &str) -> Result<usize> {
+        let count = self.conn.execute(
+            r#"DELETE FROM threads WHERE account_id = ?1
+               AND id NOT IN (
+                   SELECT DISTINCT thread_id FROM messages
+                   WHERE account_id = ?1 AND thread_id IS NOT NULL
+               )"#,
+            [account_id],
+        )?;
+        Ok(count)
+    }
+
     /// Rebuild the thread_mailboxes join table for an account.
     /// Derived from messages + message_mailboxes: a thread belongs to a mailbox
     /// if any of its messages does.

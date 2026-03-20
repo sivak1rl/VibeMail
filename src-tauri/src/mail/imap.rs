@@ -519,6 +519,12 @@ pub async fn persist_batch(
             }
         }
 
+        // Clean up orphaned threads (old thread rows left behind by re-threading merges)
+        let orphans = db_lock.delete_orphaned_threads(&account.id)?;
+        if orphans > 0 {
+            info!("Deleted {} orphaned thread(s)", orphans);
+        }
+
         // Refresh denormalized tables inside the same transaction
         db_lock.refresh_thread_mailboxes(&account.id)?;
         db_lock.refresh_mailbox_counts(&account.id)?;
