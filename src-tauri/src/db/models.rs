@@ -23,6 +23,9 @@ pub struct Mailbox {
     pub uid_validity: Option<u32>,
     pub uid_next: Option<u32>,
     pub last_synced_at: Option<DateTime<Utc>>,
+    pub thread_count: u32,
+    pub unread_count: u32,
+    pub folder_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,9 +52,15 @@ pub struct Message {
     pub references_ids: Vec<String>,
     pub in_reply_to: Option<String>,
     pub flags: Vec<String>,
+    pub is_read: bool,
+    pub is_flagged: bool,
     pub has_attachments: bool,
     pub triage_score: Option<f64>,
     pub ai_summary: Option<String>,
+    /// JSON array of mailbox IDs this message belongs to.
+    /// For Gmail: derived from X-GM-LABELS. For other providers: [mailbox_id].
+    /// Always populated; never NULL.
+    pub inbox_mailboxes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

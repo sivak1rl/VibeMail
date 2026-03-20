@@ -331,6 +331,18 @@
   margin-bottom: 8px;
 }
 
+.roundupBtn {
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.roundupBtn:hover:not(:disabled) { border-color: var(--color-accent); color: var(--color-accent); }
+.roundupBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .focusBtn {
   flex: 1;
   background: none;

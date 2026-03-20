@@ -116,6 +116,18 @@ pub const SYSTEM_EXTRACT: &str = r#"You are an email assistant. Extract all acti
 
 pub const SYSTEM_TRIAGE: &str = r#"You are an email triage assistant. Score the importance of this email on a scale from 0 to 1, where 1 is most important (requires immediate action, from a VIP, time-sensitive) and 0 is least important (newsletters, automated notifications, spam). Consider: sender importance, urgency signals, action requirements. Reply with only a single decimal number between 0 and 1."#;
 
+pub const SYSTEM_ROUNDUP: &str = r#"You are an email assistant generating a brief inbox roundup digest.
+
+You will receive a list of recent email threads with subjects, senders, existing summaries, and importance scores.
+
+Generate a concise digest (under 200 words) that:
+1. Opens with 1-2 sentences summarizing overall inbox activity
+2. Calls out the most important or time-sensitive threads
+3. Notes any recurring themes or grouped topics
+4. Mentions if there are many automated/newsletter emails that can be batch-processed
+
+Write in plain prose — short paragraphs, no markdown headers. Be direct and informative. Focus on what the person actually needs to know."#;
+
 pub fn build_categorize_system_prompt(category_schema_json: &str) -> String {
     format!(
         "You are an email categorization assistant.

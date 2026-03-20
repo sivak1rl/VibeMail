@@ -26,6 +26,26 @@ export interface TriageResult {
   score: number;
 }
 
+export interface ThreadHighlight {
+  thread_id: string;
+  subject: string;
+  last_from: string;
+  triage_score: number;
+  summary: string | null;
+  labels: string[];
+  unread: boolean;
+}
+
+export interface RoundupResult {
+  period_start: number;
+  period_end: number;
+  total_threads: number;
+  unread_count: number;
+  action_item_count: number;
+  highlights: ThreadHighlight[];
+  narrative: string;
+}
+
 export interface CategorizeThreadResult {
   thread_id: string;
   label: string;
@@ -52,6 +72,9 @@ interface AiState {
   configLoaded: boolean;
   batchSummarizing: boolean;
   batchCategorizing: boolean;
+  roundup: RoundupResult | null;
+  roundupStreaming: boolean;
+  roundupNarrative: string;
 
   loadConfig: () => Promise<void>;
   saveConfig: (config: AiConfig, apiKey?: string) => Promise<void>;
@@ -67,7 +90,12 @@ interface AiState {
   draftNew: (prompt: string) => Promise<string>;
   extractActions: (threadId: string) => Promise<ExtractedAction[]>;
   triageThread: (threadId: string) => Promise<TriageResult>;
+  generateRoundup: (accountId: string, days: number) => Promise<void>;
 }
+
+// Module-level counter: incremented on every generateRoundup call so stale listeners
+// from a previous call (e.g. tab switch, React StrictMode double-effect) can self-discard.
+let _roundupGeneration = 0;
 
 export const useAiStore = create<AiState>((set, get) => ({
   config: null,
@@ -79,6 +107,9 @@ export const useAiStore = create<AiState>((set, get) => ({
   configLoaded: false,
   batchSummarizing: false,
   batchCategorizing: false,
+  roundup: null,
+  roundupStreaming: false,
+  roundupNarrative: "",
 
   loadConfig: async () => {
     try {
@@ -269,5 +300,41 @@ export const useAiStore = create<AiState>((set, get) => ({
     return invoke<TriageResult>("triage_thread", {
       request: { thread_id: threadId, account_id: "" },
     });
+  },
+
+  generateRoundup: async (accountId, days) => {
+    // Claim this generation. Any listeners registered by a previous call will see their
+    // generation no longer matches and will ignore incoming tokens + clean themselves up.
+    _roundupGeneration++;
+    const gen = _roundupGeneration;
+
+    set({ roundup: null, roundupNarrative: "", roundupStreaming: true });
+
+    const unlistenToken = await listen<string>("ai_roundup", (event) => {
+      if (_roundupGeneration !== gen) return; // stale — discard
+      set((s) => ({ roundupNarrative: s.roundupNarrative + event.payload }));
+    });
+
+    const unlistenDone = await listen<string>("ai_roundup_done", () => {
+      unlistenToken();
+      unlistenDone();
+      if (_roundupGeneration !== gen) return; // stale — discard
+      set({ roundupStreaming: false });
+    });
+
+    try {
+      const result = await invoke<RoundupResult>("generate_roundup", {
+        request: { account_id: accountId, days, limit: 20 },
+      });
+      if (_roundupGeneration === gen) {
+        set({ roundup: result });
+      }
+    } catch (e) {
+      unlistenToken();
+      unlistenDone();
+      if (_roundupGeneration === gen) {
+        set({ roundupStreaming: false, roundupNarrative: `Error: ${e}` });
+      }
+    }
   },
 }));

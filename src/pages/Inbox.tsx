@@ -12,6 +12,8 @@ import SearchBar from "../components/SearchBar/SearchBar";
 import Compose, { type ComposeMode } from "../components/Compose/Compose";
 import styles from "./Inbox.module.css";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import logoTransparent from "../../logo_transparent.png";
 
 interface Props {
@@ -56,6 +58,22 @@ export default function Inbox({ onSettings }: Props) {
   const { loadConfig, summarizeThreads, categorizeThreads, batchSummarizing, batchCategorizing } = useAiStore();
   const { autoLabelNewEmails, customCategories, historyFetchDays, historyFetchLimit } = usePreferencesStore();
 
+  const openRoundup = useCallback(async () => {
+    if (!activeAccountId) return;
+    const existing = await WebviewWindow.getByLabel("roundup");
+    if (existing) {
+      await existing.setFocus();
+      return;
+    }
+    new WebviewWindow("roundup", {
+      url: `index.html?window=roundup&accountId=${encodeURIComponent(activeAccountId)}`,
+      title: "Inbox Roundup",
+      width: 680,
+      height: 700,
+      resizable: true,
+      center: true,
+    });
+  }, [activeAccountId]);
   const [showSearch, setShowSearch] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedThreadIds, setSelectedThreadIds] = useState<string[]>([]);
@@ -322,6 +340,29 @@ export default function Inbox({ onSettings }: Props) {
     setReplyComposeMode(null);
   }, [selectedThreadId]);
 
+  // Listen for cross-window actions from the roundup window
+  useEffect(() => {
+    const unlisteners: Promise<() => void>[] = [];
+
+    unlisteners.push(
+      listen<{ threadId: string }>("roundup:open-thread", (event) => {
+        void selectThread(event.payload.threadId);
+      })
+    );
+
+    unlisteners.push(
+      listen<{ threadId: string }>("roundup:reply-thread", (event) => {
+        void selectThread(event.payload.threadId);
+        // Small delay so thread loads before opening compose
+        setTimeout(() => setReplyComposeMode("reply"), 200);
+      })
+    );
+
+    return () => {
+      unlisteners.forEach((p) => void p.then((unlisten) => unlisten()));
+    };
+  }, [selectThread]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -549,6 +590,14 @@ export default function Inbox({ onSettings }: Props) {
           </div>
           <div className={styles.controls}>
             <button
+              className={styles.roundupBtn}
+              onClick={openRoundup}
+              disabled={!activeAccountId}
+              title="Email roundup digest"
+            >
+              Roundup
+            </button>
+            <button
               className={`${styles.focusBtn} ${focusMode ? styles.focusActive : ""}`}
               onClick={() => setFocusMode(!focusMode)}
               title="Focus: show only important mail"
@@ -668,6 +717,7 @@ export default function Inbox({ onSettings }: Props) {
           </div>
         </div>
       )}
+
 
       {/* Keyboard shortcut help modal */}
       {showHelpModal && (

@@ -201,7 +201,7 @@ pub async fn sync_mailbox(
                 .try_collect()
                 .await?;
             let gmail_labels = if account.provider == "gmail" {
-                fetch_gmail_vibemail_labels(session, &uid_range).await?
+                fetch_all_gmail_labels(session, &uid_range).await?
             } else {
                 HashMap::new()
             };
@@ -253,7 +253,7 @@ pub async fn sync_mailbox(
                     .await?;
 
                 let gmail_labels = if account.provider == "gmail" {
-                    fetch_gmail_vibemail_labels(session, &uid_range).await?
+                    fetch_all_gmail_labels(session, &uid_range).await?
                 } else {
                     HashMap::new()
                 };
@@ -324,7 +324,7 @@ async fn refresh_missing_attachments(
             .await?;
 
         let gmail_labels = if account.provider == "gmail" {
-            fetch_gmail_vibemail_labels(session, &uid_range).await?
+            fetch_all_gmail_labels(session, &uid_range).await?
         } else {
             HashMap::new()
         };
@@ -396,8 +396,36 @@ pub fn parse_fetches(
                     .map(|f| flag_to_string(&f))
                     .filter(|s| !s.is_empty())
                     .collect();
-                if let Some(labels) = gmail_labels.get(&uid) {
-                    msg.flags.extend(labels.iter().cloned());
+                msg.is_read = msg.flags.iter().any(|f| f == "\\Seen");
+                msg.is_flagged = msg.flags.iter().any(|f| f == "\\Flagged");
+                if let Some(raw_labels) = gmail_labels.get(&uid) {
+                    println!(">>> GMAIL LABELS uid={}: {:?}", uid, raw_labels);
+                    // VibeMail/* labels → append to flags (existing categorisation system)
+                    for label in raw_labels {
+                        if let Some(vibe) = extract_vibemail_label(label) {
+                            msg.flags.push(format!("VibeMail/{}", vibe));
+                        }
+                    }
+                    // System labels → resolve to mailbox IDs for inbox_mailboxes
+                    msg.inbox_mailboxes = raw_labels
+                        .iter()
+                        .filter_map(|label| {
+                            let resolved = gmail_label_to_mailbox_name(label);
+                            if resolved.is_none() && (label.starts_with('\\') || label.starts_with("\\\\")) {
+                                println!(">>> GMAIL SYSTEM LABEL UNRESOLVED: {:?} (bytes: {:?})", label, label.as_bytes());
+                            }
+                            resolved.map(|mb_name| format!("{}:{}", account.id, mb_name))
+                        })
+                        .collect();
+                    println!(">>> INBOX_MAILBOXES uid={}: {:?}", uid, msg.inbox_mailboxes);
+                } else {
+                    println!(">>> GMAIL LABELS uid={}: NO LABELS RETURNED", uid);
+                }
+                // Always include the mailbox we're syncing from.
+                // For Gmail All Mail: ensures messages appear under All Mail in sidebar.
+                // For non-Gmail: sets the single canonical mailbox.
+                if !msg.inbox_mailboxes.contains(&mailbox.id) {
+                    msg.inbox_mailboxes.push(mailbox.id.clone());
                 }
                 results.push((msg, atts));
             }
@@ -421,21 +449,37 @@ pub async fn persist_batch(
         all_thread_messages.push(msg.clone());
     }
 
-    // 2. Find which threads these messages belong to (if any already exist in DB)
-    let mut thread_ids: BTreeSet<String> = BTreeSet::new();
-    for (msg, _) in batch {
-        if let Some(tid) = &msg.thread_id {
-            thread_ids.insert(tid.clone());
-        }
-    }
+    // 2-3. Find existing threads for these messages (by thread_id field OR by Message-ID header)
+    // and pull their messages in so threading can merge correctly.
+    // Matching by Message-ID header catches cross-mailbox duplicates (e.g. Gmail labels:
+    // the same email synced from INBOX and [Gmail]/All Mail has the same header but different UIDs).
+    {
+        let message_ids: Vec<String> = batch
+            .iter()
+            .filter_map(|(msg, _)| msg.message_id.clone())
+            .collect();
 
-    // 3. Fetch existing history for these threads to ensure accurate counts/merging
-    if !thread_ids.is_empty() {
         let db_lock = db.lock().await;
+
+        let mut thread_ids: BTreeSet<String> = BTreeSet::new();
+
+        // Match by Message-ID header (cross-mailbox dedup)
+        let mid_to_tid = db_lock.get_thread_ids_by_message_ids(&message_ids)?;
+        for tid in mid_to_tid.into_values() {
+            thread_ids.insert(tid);
+        }
+
+        // Also match by thread_id already set on batch messages (same-mailbox re-sync)
+        for (msg, _) in batch {
+            if let Some(tid) = &msg.thread_id {
+                thread_ids.insert(tid.clone());
+            }
+        }
+
         for tid in thread_ids {
             let existing = db_lock.get_thread_messages(&tid)?;
             for ext_msg in existing {
-                // Don't add if we already have it in our batch (batch is newer)
+                // Don't add if we already have this exact message row in our batch (batch is newer)
                 if !all_thread_messages.iter().any(|m| m.id == ext_msg.id) {
                     all_thread_messages.push(ext_msg);
                 }
@@ -446,48 +490,67 @@ pub async fn persist_batch(
     // 4. Build updated thread objects
     let updated_threads = threading::build_threads(all_thread_messages, &account.id);
 
-    // 5. Persist everything
+    // 5. Persist everything inside an explicit transaction for performance.
+    // Without this, each upsert auto-commits which is very slow with many messages.
     let db_lock = db.lock().await;
-    db_lock.upsert_mailbox(mailbox)?;
+    db_lock.conn.execute_batch("BEGIN")?;
 
-    let mut thread_count = 0;
-    let mut msg_count = 0;
+    let result = (|| -> Result<(usize, usize)> {
+        db_lock.upsert_mailbox(mailbox)?;
 
-    for thread in &updated_threads {
-        if let Err(e) = db_lock.upsert_thread(thread) {
-            println!(">>> DB ERROR: upsert_thread failed: {}", e);
-            return Err(e);
-        }
-        thread_count += 1;
-        if let Some(msgs) = &thread.messages {
-            for msg in msgs {
-                if let Err(e) = db_lock.upsert_message(msg) {
-                    println!(">>> DB ERROR: upsert_message failed: {}", e);
-                    return Err(e);
-                }
-                msg_count += 1;
-                // Only update attachments for messages that were in our current batch
-                if let Some((_, atts)) = batch.iter().find(|(m, _)| m.id == msg.id) {
-                    db_lock.delete_message_attachments(&msg.id)?;
-                    for att in atts {
-                        if let Err(e) = db_lock.upsert_attachment(att) {
-                            println!(">>> DB ERROR: upsert_attachment failed: {}", e);
-                            return Err(e);
+        let mut thread_count = 0;
+        let mut msg_count = 0;
+
+        for thread in &updated_threads {
+            db_lock.upsert_thread(thread)?;
+            thread_count += 1;
+            if let Some(msgs) = &thread.messages {
+                for msg in msgs {
+                    db_lock.upsert_message(msg)?;
+                    msg_count += 1;
+                    // Only update attachments for messages that were in our current batch
+                    if let Some((_, atts)) = batch.iter().find(|(m, _)| m.id == msg.id) {
+                        db_lock.delete_message_attachments(&msg.id)?;
+                        for att in atts {
+                            db_lock.upsert_attachment(att)?;
                         }
                     }
                 }
             }
         }
+
+        // Clean up orphaned threads (old thread rows left behind by re-threading merges)
+        let orphans = db_lock.delete_orphaned_threads(&account.id)?;
+        if orphans > 0 {
+            info!("Deleted {} orphaned thread(s)", orphans);
+        }
+
+        // Refresh denormalized tables inside the same transaction
+        db_lock.refresh_thread_mailboxes(&account.id)?;
+        db_lock.refresh_mailbox_counts(&account.id)?;
+
+        Ok((thread_count, msg_count))
+    })();
+
+    match result {
+        Ok((thread_count, msg_count)) => {
+            db_lock.conn.execute_batch("COMMIT")?;
+            println!(
+                ">>> DB: Successfully persisted {} threads and {} messages",
+                thread_count, msg_count
+            );
+            info!(
+                "Persisted {} threads and {} messages",
+                thread_count, msg_count
+            );
+            Ok(())
+        }
+        Err(e) => {
+            let _ = db_lock.conn.execute_batch("ROLLBACK");
+            println!(">>> DB ERROR: persist_batch failed: {}", e);
+            Err(e)
+        }
     }
-    println!(
-        ">>> DB: Successfully persisted {} threads and {} messages",
-        thread_count, msg_count
-    );
-    info!(
-        "Persisted {} threads and {} messages",
-        thread_count, msg_count
-    );
-    Ok(())
 }
 
 pub async fn list_mailboxes(session: &mut ImapSession, account_id: &str) -> Result<Vec<Mailbox>> {
@@ -507,12 +570,41 @@ pub async fn list_mailboxes(session: &mut ImapSession, account_id: &str) -> Resu
             uid_validity: None,
             uid_next: None,
             last_synced_at: None,
+            thread_count: 0,
+            unread_count: 0,
+            folder_role: detect_folder_role(b.name()),
         })
         .collect();
     Ok(mailboxes)
 }
 
-pub async fn fetch_gmail_vibemail_labels(
+/// Derive a folder_role from the mailbox name.
+fn detect_folder_role(name: &str) -> Option<String> {
+    let upper = name.to_uppercase();
+    if upper == "INBOX" {
+        Some("inbox".to_string())
+    } else if upper.contains("SENT") {
+        Some("sent".to_string())
+    } else if upper.contains("DRAFT") {
+        Some("drafts".to_string())
+    } else if upper.contains("TRASH") {
+        Some("trash".to_string())
+    } else if upper.contains("SPAM") || upper.contains("JUNK") {
+        Some("spam".to_string())
+    } else if upper.contains("ALL MAIL") {
+        Some("all_mail".to_string())
+    } else if upper.contains("STAR") {
+        Some("starred".to_string())
+    } else if upper.contains("IMPORTANT") {
+        Some("important".to_string())
+    } else {
+        None
+    }
+}
+
+/// Fetch ALL X-GM-LABELS for the given UID range, returning raw label strings per UID.
+/// This replaces the old VibeMail-only filter — callers decide which labels to keep.
+pub async fn fetch_all_gmail_labels(
     session: &mut ImapSession,
     uid_range: &str,
 ) -> Result<HashMap<u32, Vec<String>>> {
@@ -536,8 +628,7 @@ pub async fn fetch_gmail_vibemail_labels(
                             labels.extend(
                                 values
                                     .iter()
-                                    .map(|value| value.as_ref().to_string())
-                                    .filter_map(parse_vibemail_label),
+                                    .map(|value| value.as_ref().to_string()),
                             );
                         }
                         _ => {}
@@ -561,7 +652,26 @@ pub async fn fetch_gmail_vibemail_labels(
     Ok(labels_by_uid)
 }
 
-fn parse_vibemail_label(raw: String) -> Option<String> {
+/// Map a Gmail system label (from X-GM-LABELS) to the local mailbox name.
+/// Returns None for unknown or user-defined labels.
+fn gmail_label_to_mailbox_name(label: &str) -> Option<&str> {
+    let trimmed = label.trim_matches('"');
+    // imap-proto returns system labels with double backslashes (e.g., "\\Inbox")
+    // so we strip one leading backslash before matching.
+    let normalized = trimmed.strip_prefix('\\').unwrap_or(trimmed);
+    match normalized {
+        "\\Inbox" => Some("INBOX"),
+        "\\Sent" => Some("[Gmail]/Sent Mail"),
+        "\\Draft" => Some("[Gmail]/Drafts"),
+        "\\Spam" => Some("[Gmail]/Spam"),
+        "\\Trash" => Some("[Gmail]/Trash"),
+        "\\Important" => Some("[Gmail]/Important"),
+        "\\Starred" => Some("[Gmail]/Starred"),
+        _ => None,
+    }
+}
+
+fn extract_vibemail_label(raw: &str) -> Option<String> {
     let trimmed = raw.trim_matches('"');
     let value = trimmed.strip_prefix("VibeMail/")?.trim();
     if value.is_empty() {

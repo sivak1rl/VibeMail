@@ -4,7 +4,8 @@ use crate::ai::{
     stream::stream_to_frontend,
     tools::{
         build_categorize_system_prompt, parse_category_label, parse_extracted_actions,
-        parse_triage_score, SYSTEM_DRAFT, SYSTEM_EXTRACT, SYSTEM_SUMMARIZE, SYSTEM_TRIAGE,
+        parse_triage_score, SYSTEM_DRAFT, SYSTEM_EXTRACT, SYSTEM_ROUNDUP, SYSTEM_SUMMARIZE,
+        SYSTEM_TRIAGE,
     },
 };
 use crate::db::{
@@ -835,6 +836,174 @@ async fn run_uid_store(
         .is_some()
     {}
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RoundupRequest {
+    pub account_id: String,
+    pub days: u32,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ThreadHighlight {
+    pub thread_id: String,
+    pub subject: String,
+    pub last_from: String,
+    pub triage_score: f64,
+    pub summary: Option<String>,
+    pub labels: Vec<String>,
+    pub unread: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoundupResult {
+    pub period_start: i64,
+    pub period_end: i64,
+    pub total_threads: usize,
+    pub unread_count: usize,
+    pub action_item_count: usize,
+    pub highlights: Vec<ThreadHighlight>,
+    pub narrative: String,
+}
+
+#[tauri::command]
+pub async fn generate_roundup(
+    request: RoundupRequest,
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<Database>>>,
+    router: State<'_, Arc<AiRouter>>,
+) -> Result<RoundupResult, String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_secs() as i64;
+
+    let days = request.days.clamp(1, 90);
+    let limit = request.limit.unwrap_or(20).min(50);
+    let since = now - (days as i64 * 86400);
+
+    let (total_threads, unread_count, action_item_count, threads) = {
+        let db = db.lock().await;
+        let (total, unread, actions) = db
+            .get_roundup_stats(&request.account_id, since)
+            .map_err(|e| e.to_string())?;
+        let threads = db
+            .get_threads_in_window(&request.account_id, since, limit)
+            .map_err(|e| e.to_string())?;
+        (total, unread, actions, threads)
+    };
+
+    if threads.is_empty() {
+        return Ok(RoundupResult {
+            period_start: since,
+            period_end: now,
+            total_threads: 0,
+            unread_count: 0,
+            action_item_count: 0,
+            highlights: vec![],
+            narrative: format!(
+                "No emails in the last {} day{}.",
+                days,
+                if days == 1 { "" } else { "s" }
+            ),
+        });
+    }
+
+    let privacy = {
+        let db = db.lock().await;
+        db.get_ai_config().unwrap_or_default().privacy_mode
+    };
+
+    let mut highlights = Vec::with_capacity(threads.len());
+    let mut context_lines = Vec::with_capacity(threads.len());
+
+    for thread in &threads {
+        let summary = {
+            let db = db.lock().await;
+            db.get_thread_summary(&thread.id).unwrap_or(None)
+        };
+
+        let subject = thread.subject.as_deref().unwrap_or("[no subject]");
+        let last_from = if privacy {
+            "Sender".to_string()
+        } else {
+            thread
+                .last_from
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string())
+        };
+        let score = thread.triage_score.unwrap_or(0.5);
+
+        let mut line = format!(
+            "- \"{}\" from {} (score: {:.1})",
+            subject, last_from, score
+        );
+        if !thread.labels.is_empty() {
+            line.push_str(&format!(" [{}]", thread.labels.join(", ")));
+        }
+        if thread.unread_count > 0 {
+            line.push_str(" [unread]");
+        }
+        if let Some(ref s) = summary {
+            if !s.is_empty() {
+                line.push_str(&format!(
+                    "\n  Summary: {}",
+                    s.chars().take(200).collect::<String>()
+                ));
+            }
+        }
+
+        context_lines.push(line);
+        highlights.push(ThreadHighlight {
+            thread_id: thread.id.clone(),
+            subject: subject.to_string(),
+            last_from,
+            triage_score: score,
+            summary,
+            labels: thread.labels.clone(),
+            unread: thread.unread_count > 0,
+        });
+    }
+
+    let context = format!(
+        "Inbox roundup — last {} day{} ({} threads total, {} unread):\n\n{}",
+        days,
+        if days == 1 { "" } else { "s" },
+        total_threads,
+        unread_count,
+        context_lines.join("\n\n")
+    );
+
+    let chat_messages = vec![
+        ChatMessage {
+            role: "system".into(),
+            content: SYSTEM_ROUNDUP.into(),
+        },
+        ChatMessage {
+            role: "user".into(),
+            content: context,
+        },
+    ];
+
+    let stream = router
+        .stream_complete(TaskKind::Summary, chat_messages)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let narrative = stream_to_frontend(&app, stream, "ai_roundup")
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(RoundupResult {
+        period_start: since,
+        period_end: now,
+        total_threads,
+        unread_count,
+        action_item_count,
+        highlights,
+        narrative,
+    })
 }
 
 #[tauri::command]

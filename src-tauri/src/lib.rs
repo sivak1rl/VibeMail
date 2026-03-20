@@ -104,6 +104,7 @@ pub fn run() {
             commands::ai::get_ai_config,
             commands::ai::get_thread_insights,
             commands::ai::set_ai_config,
+            commands::ai::generate_roundup,
             commands::search::search_messages,
             commands::search::search_semantic,
             commands::search::reindex_all_semantic,

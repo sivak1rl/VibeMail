@@ -13,8 +13,14 @@ pub struct Database {
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
-        // WAL mode for concurrent reads and crash safety
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA foreign_keys=ON;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA cache_size=-32000;
+             PRAGMA temp_store=MEMORY;
+             PRAGMA mmap_size=268435456;",
+        )?;
         let mut db = Self { conn };
         schema::run_migrations(&mut db.conn)?;
         Ok(db)

@@ -79,9 +79,12 @@ pub fn parse_message(
         references_ids,
         in_reply_to,
         flags: Vec::new(),
+        is_read: false,
+        is_flagged: false,
         has_attachments,
         triage_score: None,
         ai_summary: None,
+        inbox_mailboxes: Vec::new(),
     };
 
     Ok((msg, attachments))
