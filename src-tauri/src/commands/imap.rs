@@ -1,6 +1,6 @@
 use crate::db::{models::*, Database};
 use crate::mail::imap::format_uid_sequence_set;
-use crate::mail::{imap as mail_imap, sync::SyncManager};
+use crate::mail::{idle::IdleManager, imap as mail_imap, sync::SyncManager};
 use crate::search::SearchIndex;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures::TryStreamExt;
@@ -288,6 +288,7 @@ pub async fn sync_account(
     db: State<'_, Arc<Mutex<Database>>>,
     search: State<'_, Arc<Mutex<SearchIndex>>>,
     sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
+    idle_mgr: State<'_, Arc<Mutex<IdleManager>>>,
 ) -> Result<SyncResult, String> {
     let account_id = request.account_id.clone();
     let mailbox_id = request.mailbox_id.clone();
@@ -305,28 +306,23 @@ pub async fn sync_account(
         mgr.start_sync(&account_id);
     }
 
+    // Pause IDLE while syncing to avoid contention on the mailbox.
+    {
+        let idle = idle_mgr.lock().await;
+        idle.pause(&account_id);
+    }
+
     // Clone for background task
     let db_clone = db.inner().clone();
     let search_clone = search.inner().clone();
     let sync_mgr_clone = sync_mgr.inner().clone();
+    let idle_mgr_clone = idle_mgr.inner().clone();
     let app_clone = app.clone();
     let account_id_task = account_id.clone();
     let mailbox_id_task = mailbox_id.clone();
 
-    // Check provider before spawning — Gmail always syncs via All Mail
-    let is_gmail = {
-        let db = db.lock().await;
-        db.list_accounts()
-            .ok()
-            .and_then(|accs| accs.into_iter().find(|a| a.id == account_id))
-            .map(|a| a.provider == "gmail")
-            .unwrap_or(false)
-    };
-
     tokio::spawn(async move {
         let result = if let Some(mid) = &mailbox_id_task {
-            // Specific mailbox requested — sync it directly.
-            // For Gmail, X-GM-LABELS are still fetched in sync_mailbox to populate inbox_mailboxes.
             do_sync(
                 &account_id_task,
                 Some(mid),
@@ -335,9 +331,6 @@ pub async fn sync_account(
                 app_clone,
             )
             .await
-        } else if is_gmail {
-            // Gmail with no specific mailbox: sync only [Gmail]/All Mail
-            sync_all_folders(&account_id_task, db_clone, search_clone, app_clone).await
         } else {
             sync_all_folders(&account_id_task, db_clone, search_clone, app_clone).await
         };
@@ -349,6 +342,11 @@ pub async fn sync_account(
 
         let mut mgr = sync_mgr_clone.lock().await;
         mgr.finish_sync(&account_id_task, err);
+        drop(mgr);
+
+        // Resume IDLE after sync completes.
+        let idle = idle_mgr_clone.lock().await;
+        idle.resume(&account_id_task);
     });
 
     // Return immediately to frontend
@@ -1144,6 +1142,38 @@ pub async fn wipe_local_data(
         let search = search.lock().await;
         search.clear_all().map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_idle(
+    account_id: String,
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<Database>>>,
+    search: State<'_, Arc<Mutex<SearchIndex>>>,
+    idle_mgr: State<'_, Arc<Mutex<IdleManager>>>,
+) -> Result<(), String> {
+    let account = {
+        let db = db.lock().await;
+        db.list_accounts()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|a| a.id == account_id)
+            .ok_or_else(|| "Account not found".to_string())?
+    };
+
+    let mut idle = idle_mgr.lock().await;
+    idle.start(account, db.inner().clone(), search.inner().clone(), app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_idle(
+    account_id: String,
+    idle_mgr: State<'_, Arc<Mutex<IdleManager>>>,
+) -> Result<(), String> {
+    let mut idle = idle_mgr.lock().await;
+    idle.stop(&account_id).await;
     Ok(())
 }
 

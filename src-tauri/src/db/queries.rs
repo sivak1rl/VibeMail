@@ -185,7 +185,7 @@ impl Database {
                ORDER BY CASE WHEN folder_role = 'inbox' THEN 0 ELSE 1 END, name COLLATE NOCASE"#,
         )?;
         let mailboxes = stmt
-            .query_map([account_id], |row| Self::row_to_mailbox(row))?
+            .query_map([account_id], Self::row_to_mailbox)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(mailboxes)
     }
@@ -351,7 +351,7 @@ impl Database {
                    FROM threads t
                    JOIN thread_mailboxes tm ON tm.thread_id = t.id AND tm.mailbox_id = ?2
                    WHERE t.account_id=?1
-                   ORDER BY t.last_date DESC LIMIT ?3 OFFSET ?4"#,
+                   ORDER BY t.last_date DESC, t.id LIMIT ?3 OFFSET ?4"#,
             )?;
             let rows = stmt.query_map(
                 rusqlite::params![account_id, mailbox_id, limit, offset],
@@ -363,7 +363,7 @@ impl Database {
                 r#"SELECT id, account_id, subject, participant_ids, message_count, unread_count,
                    is_flagged, has_attachments, last_date, last_from, triage_score, labels
                    FROM threads WHERE account_id=?1
-                   ORDER BY last_date DESC LIMIT ?2 OFFSET ?3"#,
+                   ORDER BY last_date DESC, id LIMIT ?2 OFFSET ?3"#,
             )?;
             let rows = stmt.query_map(rusqlite::params![account_id, limit, offset], map_thread)?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -389,7 +389,7 @@ impl Database {
                  WHERE tm.thread_id = threads.id
                    AND COALESCE(mb.folder_role, '') NOT IN ('trash', 'spam', 'all_mail', 'drafts')
                )
-               ORDER BY COALESCE(triage_score, 0.5) DESC, last_date DESC LIMIT ?3"#,
+               ORDER BY COALESCE(triage_score, 0.5) DESC, last_date DESC, id LIMIT ?3"#,
         )?;
         let threads = stmt
             .query_map(
@@ -859,15 +859,15 @@ impl Database {
                  FROM threads t
                  JOIN thread_mailboxes tm ON tm.thread_id = t.id AND tm.mailbox_id = ?{}
                  WHERE t.id IN ({})
-                 ORDER BY t.last_date DESC",
+                 ORDER BY t.last_date DESC, t.id",
                 ids.len() + 1,
                 placeholders
             )
         } else {
             format!(
-                "SELECT id, account_id, subject, participant_ids, message_count, unread_count, 
+                "SELECT id, account_id, subject, participant_ids, message_count, unread_count,
                         is_flagged, has_attachments, last_date, last_from, triage_score, labels
-                 FROM threads WHERE id IN ({}) ORDER BY last_date DESC",
+                 FROM threads WHERE id IN ({}) ORDER BY last_date DESC, id",
                 placeholders
             )
         };

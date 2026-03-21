@@ -7,7 +7,7 @@ mod search;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::Manager;
+use tauri::{Manager, RunEvent};
 use tokio::sync::{oneshot, Mutex};
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -58,6 +58,9 @@ pub fn run() {
             app.manage(Arc::new(tokio::sync::Mutex::new(
                 mail::sync::SyncManager::new(),
             )));
+            app.manage(Arc::new(tokio::sync::Mutex::new(
+                mail::idle::IdleManager::new(),
+            )));
             let oauth_pending: OAuthPending = Arc::new(Mutex::new(HashMap::new()));
             app.manage(oauth_pending);
 
@@ -89,6 +92,9 @@ pub fn run() {
             commands::imap::get_attachment_data,
             commands::imap::delete_all_attachments,
             commands::imap::wipe_local_data,
+            commands::imap::start_idle,
+            commands::imap::stop_idle,
+            commands::general::open_url,
             commands::smtp::send_message,
             commands::drafts::save_draft,
             commands::drafts::get_draft,
@@ -110,6 +116,17 @@ pub fn run() {
             commands::search::reindex_all_semantic,
             commands::search::get_reindex_status,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if let RunEvent::Exit = event {
+                // Stop all IDLE tasks on app exit.
+                let idle_mgr: Arc<Mutex<mail::idle::IdleManager>> =
+                    app.state::<Arc<Mutex<mail::idle::IdleManager>>>().inner().clone();
+                tauri::async_runtime::block_on(async {
+                    let mut idle = idle_mgr.lock().await;
+                    idle.stop_all().await;
+                });
+            }
+        });
 }

@@ -1,4 +1,6 @@
-import { useEffect, useState, Component, ReactNode } from "react";
+import { useEffect, useState, useRef, Component, ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useAccountStore } from "./stores/accounts";
 import { useMailboxStore } from "./stores/mailboxes";
 import { useThreadStore } from "./stores/threads";
@@ -72,6 +74,36 @@ export default function App() {
 
     return () => clearInterval(timer);
   }, [activeAccountId, autoSyncIntervalMinutes, fetchMailboxes, syncAccount]);
+
+  // IMAP IDLE — start push notifications for the active account.
+  const idleAccountRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeAccountId) return;
+
+    // Start IDLE for this account.
+    invoke("start_idle", { accountId: activeAccountId }).catch(() => {});
+    idleAccountRef.current = activeAccountId;
+
+    // Listen for new-mail push events from IDLE.
+    const unlisten = listen<{ account_id: string }>("idle-new-mail", (event) => {
+      const { account_id } = event.payload;
+      if (useThreadStore.getState().syncing) return;
+      void (async () => {
+        const mailboxId = useMailboxStore.getState().selectedMailboxId;
+        await syncAccount(account_id, mailboxId);
+        await fetchMailboxes(account_id, true);
+      })();
+    });
+
+    return () => {
+      // Stop IDLE when account changes or component unmounts.
+      if (idleAccountRef.current) {
+        invoke("stop_idle", { accountId: idleAccountRef.current }).catch(() => {});
+        idleAccountRef.current = null;
+      }
+      unlisten.then((fn) => fn());
+    };
+  }, [activeAccountId, syncAccount, fetchMailboxes]);
 
   if (initialLoad) {
     return <div className={styles.app} />;

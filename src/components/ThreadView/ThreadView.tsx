@@ -201,11 +201,27 @@ function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean 
 
   const sanitizedHtml = useMemo(() => {
     if (!msg.body_html) return "";
-    return DOMPurify.sanitize(msg.body_html, {
-      WHOLE_DOCUMENT: false,
-      ADD_TAGS: ["img"],
-      ADD_ATTR: ["src", "cid"],
+    const clean = DOMPurify.sanitize(msg.body_html, {
+      WHOLE_DOCUMENT: true,
+      ADD_TAGS: ["style", "link", "img"],
+      ADD_ATTR: ["src", "cid", "style", "class", "id", "width", "height", "align", "valign",
+                 "bgcolor", "color", "border", "cellpadding", "cellspacing", "colspan", "rowspan"],
+      FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "input", "textarea", "button"],
+      FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover"],
     });
+    // Move href → data-href so links can't navigate the iframe.
+    // The click handler in onLoad reads data-href and opens externally.
+    const doc = new DOMParser().parseFromString(clean, "text/html");
+    for (const a of doc.querySelectorAll("a[href]")) {
+      const href = a.getAttribute("href") ?? "";
+      if (href.startsWith("http")) {
+        a.setAttribute("data-href", href);
+        a.removeAttribute("href");
+        (a as HTMLElement).style.cursor = "pointer";
+        (a as HTMLElement).style.textDecoration = "underline";
+      }
+    }
+    return doc.documentElement.outerHTML;
   }, [msg.body_html]);
 
   return (
@@ -259,14 +275,23 @@ function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean 
           {msg.body_html ? (
             <iframe
               srcDoc={sanitizedHtml}
-              sandbox="allow-same-origin"
+              sandbox="allow-same-origin allow-scripts"
               className={styles.htmlFrame}
               title="Email content"
               onLoad={(e) => {
                 const frame = e.currentTarget;
-                if (frame.contentDocument) {
-                  frame.style.height = `${frame.contentDocument.body.scrollHeight + 20}px`;
-                }
+                const doc = frame.contentDocument;
+                if (!doc) return;
+                frame.style.height = `${doc.body.scrollHeight + 20}px`;
+                // Open links in system browser via data-href
+                doc.addEventListener("click", (ev) => {
+                  const anchor = (ev.target as HTMLElement).closest("a");
+                  const href = anchor?.getAttribute("data-href");
+                  if (href) {
+                    ev.preventDefault();
+                    invoke("open_url", { url: href }).catch(() => {});
+                  }
+                });
               }}
             />
           ) : (
