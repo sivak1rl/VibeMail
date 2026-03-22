@@ -10,7 +10,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 
 ### Sync & Reliability
 - [x] Background auto-sync on a timer (configurable, default 15 minutes)
-- [ ] IMAP IDLE push notifications for real-time new mail
+- [x] IMAP IDLE push notifications for real-time new mail
 - [ ] Retry logic with exponential backoff on transient failures
 - [x] Sync multiple mailboxes (Sync All button + background progress)
 - [x] Flag sync — mark read/unread, star/flag changes propagated back to server

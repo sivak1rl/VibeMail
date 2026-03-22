@@ -44,29 +44,33 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         )?;
     }
 
-    // inbox_mailboxes: JSON array of mailbox IDs this message belongs to.
-    // For Gmail: derived from X-GM-LABELS. For other providers: [mailbox_id].
-    // Always populated; never NULL.
+    // Rename mailbox_id → source_mailbox_id on messages table.
+    // This column is the IMAP source mailbox (UID namespace), NOT logical folder membership.
+    let has_source_mailbox_id: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('messages') WHERE name='source_mailbox_id'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_source_mailbox_id == 0 {
+        let has_old_mailbox_id: i64 = conn.query_row(
+            "SELECT count(*) FROM pragma_table_info('messages') WHERE name='mailbox_id'",
+            [],
+            |row| row.get(0),
+        )?;
+        if has_old_mailbox_id > 0 {
+            conn.execute("ALTER TABLE messages RENAME COLUMN mailbox_id TO source_mailbox_id", [])?;
+        }
+    }
+
+    // Drop the legacy inbox_mailboxes JSON column (replaced by message_mailboxes join table).
     let has_inbox_mailboxes: i64 = conn.query_row(
         "SELECT count(*) FROM pragma_table_info('messages') WHERE name='inbox_mailboxes'",
         [],
         |row| row.get(0),
     )?;
-
-    if has_inbox_mailboxes == 0 {
-        conn.execute(
-            "ALTER TABLE messages ADD COLUMN inbox_mailboxes TEXT",
-            [],
-        )?;
+    if has_inbox_mailboxes > 0 {
+        conn.execute("ALTER TABLE messages DROP COLUMN inbox_mailboxes", [])?;
     }
-
-    // Backfill: set inbox_mailboxes = [mailbox_id] for any pre-migration rows.
-    // Safe for non-Gmail (mailbox_id was canonical) and skips Gmail rows that
-    // already have inbox_mailboxes set from X-GM-LABELS.
-    conn.execute(
-        "UPDATE messages SET inbox_mailboxes = json_array(mailbox_id) WHERE inbox_mailboxes IS NULL",
-        [],
-    )?;
 
     // is_read / is_flagged: denormalized booleans for fast filtering.
     // Replaces instr(flags, '\\Seen') string searches in hot-path queries.
@@ -104,13 +108,10 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         "#,
     )?;
 
-    // Backfill join table from existing inbox_mailboxes JSON.
-    // Only inserts rows that don't already exist (idempotent).
+    // Backfill: ensure every message has at least its source mailbox in message_mailboxes.
     conn.execute(
         r#"INSERT OR IGNORE INTO message_mailboxes (message_id, mailbox_id)
-           SELECT m.id, j.value
-           FROM messages m, json_each(m.inbox_mailboxes) j
-           WHERE m.inbox_mailboxes IS NOT NULL"#,
+           SELECT id, source_mailbox_id FROM messages"#,
         [],
     )?;
 
@@ -165,6 +166,20 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         )?;
     }
 
+    // Auto-cleanup: delete orphaned threads when all their messages are gone.
+    conn.execute_batch(
+        r#"
+        CREATE TRIGGER IF NOT EXISTS trg_delete_orphan_thread
+        AFTER DELETE ON messages
+        FOR EACH ROW
+        WHEN OLD.thread_id IS NOT NULL
+             AND NOT EXISTS (SELECT 1 FROM messages WHERE thread_id = OLD.thread_id)
+        BEGIN
+            DELETE FROM threads WHERE id = OLD.thread_id;
+        END;
+        "#,
+    )?;
+
     Ok(())
 }
 
@@ -200,10 +215,10 @@ CREATE TABLE IF NOT EXISTS mailboxes (
 CREATE TABLE IF NOT EXISTS messages (
     id              TEXT PRIMARY KEY,       -- <account_id>:<uid>
     account_id      TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    mailbox_id      TEXT NOT NULL REFERENCES mailboxes(id) ON DELETE CASCADE,
+    source_mailbox_id TEXT NOT NULL REFERENCES mailboxes(id) ON DELETE CASCADE,  -- IMAP source (UID namespace)
     uid             INTEGER NOT NULL,
     message_id      TEXT,                   -- Message-ID header
-    thread_id       TEXT,                   -- computed thread grouping
+    thread_id       TEXT REFERENCES threads(id) ON DELETE SET NULL,
     subject         TEXT,
     "from"          TEXT,                   -- JSON: [{name, email}]
     "to"            TEXT,                   -- JSON: [{name, email}]
@@ -220,7 +235,7 @@ CREATE TABLE IF NOT EXISTS messages (
     triage_score    REAL,                   -- 0.0–1.0, higher = more important
     ai_summary      TEXT,
     synced_at       INTEGER NOT NULL DEFAULT (unixepoch()),
-    UNIQUE(account_id, mailbox_id, uid)
+    UNIQUE(account_id, source_mailbox_id, uid)
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);

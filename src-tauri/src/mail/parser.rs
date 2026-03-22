@@ -65,7 +65,7 @@ pub fn parse_message(
     let msg = Message {
         id: id.to_string(),
         account_id: account_id.to_string(),
-        mailbox_id: mailbox_id.to_string(),
+        source_mailbox_id: mailbox_id.to_string(),
         uid,
         message_id,
         thread_id: None,
@@ -84,7 +84,7 @@ pub fn parse_message(
         has_attachments,
         triage_score: None,
         ai_summary: None,
-        inbox_mailboxes: Vec::new(),
+        mailbox_ids: Vec::new(),
     };
 
     Ok((msg, attachments))

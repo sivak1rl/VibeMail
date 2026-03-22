@@ -17,6 +17,9 @@ interface Props {
   composeMode?: ComposeMode;
   onComposeClose: () => void;
   onReplyClick: (mode: ComposeMode) => void;
+  isDraftsView?: boolean;
+  onEditDraft?: () => void;
+  composeDraftId?: string;
 }
 
 interface AttachmentMetadata {
@@ -201,11 +204,27 @@ function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean 
 
   const sanitizedHtml = useMemo(() => {
     if (!msg.body_html) return "";
-    return DOMPurify.sanitize(msg.body_html, {
-      WHOLE_DOCUMENT: false,
-      ADD_TAGS: ["img"],
-      ADD_ATTR: ["src", "cid"],
+    const clean = DOMPurify.sanitize(msg.body_html, {
+      WHOLE_DOCUMENT: true,
+      ADD_TAGS: ["style", "link", "img"],
+      ADD_ATTR: ["src", "cid", "style", "class", "id", "width", "height", "align", "valign",
+                 "bgcolor", "color", "border", "cellpadding", "cellspacing", "colspan", "rowspan"],
+      FORBID_TAGS: ["script", "iframe", "object", "embed", "form", "input", "textarea", "button"],
+      FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover"],
     });
+    // Move href → data-href so links can't navigate the iframe.
+    // The click handler in onLoad reads data-href and opens externally.
+    const doc = new DOMParser().parseFromString(clean, "text/html");
+    for (const a of doc.querySelectorAll("a[href]")) {
+      const href = a.getAttribute("href") ?? "";
+      if (href.startsWith("http")) {
+        a.setAttribute("data-href", href);
+        a.removeAttribute("href");
+        (a as HTMLElement).style.cursor = "pointer";
+        (a as HTMLElement).style.textDecoration = "underline";
+      }
+    }
+    return doc.documentElement.outerHTML;
   }, [msg.body_html]);
 
   return (
@@ -259,14 +278,23 @@ function MessageItem({ msg, defaultOpen }: { msg: Message; defaultOpen: boolean 
           {msg.body_html ? (
             <iframe
               srcDoc={sanitizedHtml}
-              sandbox="allow-same-origin"
+              sandbox="allow-same-origin allow-scripts"
               className={styles.htmlFrame}
               title="Email content"
               onLoad={(e) => {
                 const frame = e.currentTarget;
-                if (frame.contentDocument) {
-                  frame.style.height = `${frame.contentDocument.body.scrollHeight + 20}px`;
-                }
+                const doc = frame.contentDocument;
+                if (!doc) return;
+                frame.style.height = `${doc.body.scrollHeight + 20}px`;
+                // Open links in system browser via data-href
+                doc.addEventListener("click", (ev) => {
+                  const anchor = (ev.target as HTMLElement).closest("a");
+                  const href = anchor?.getAttribute("data-href");
+                  if (href) {
+                    ev.preventDefault();
+                    invoke("open_url", { url: href }).catch(() => {});
+                  }
+                });
               }}
             />
           ) : (
@@ -328,10 +356,11 @@ function AttachmentPanel({ threadId }: { threadId: string }) {
   );
 }
 
-export default function ThreadView({ thread, messages, composeOpen, composeMode, onComposeClose, onReplyClick }: Props) {
+export default function ThreadView({ thread, messages, composeOpen, composeMode, onComposeClose, onReplyClick, isDraftsView, onEditDraft, composeDraftId }: Props) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const { setThreadsRead, setThreadsFlagged, archiveThreads } = useThreadStore();
+  const { setThreadsRead, setThreadsFlagged, archiveThreads, deleteThreads } = useThreadStore();
   const { actionsByThread, loadThreadInsights } = useAiStore();
+  const { autoMarkReadSeconds } = usePreferencesStore();
 
   const isUnread = useMemo(() => {
     return messages.some((m) => !m.flags.includes("\\Seen"));
@@ -346,6 +375,15 @@ export default function ThreadView({ thread, messages, composeOpen, composeMode,
     void loadThreadInsights(thread.id);
     setIsExpanded(false); // Reset expansion when switching threads
   }, [thread, loadThreadInsights]);
+
+  // Auto-mark-as-read after configured delay
+  useEffect(() => {
+    if (!thread || !isUnread || autoMarkReadSeconds <= 0) return;
+    const timer = setTimeout(() => {
+      void setThreadsRead([thread.id], true);
+    }, autoMarkReadSeconds * 1000);
+    return () => clearTimeout(timer);
+  }, [thread?.id, isUnread, autoMarkReadSeconds, setThreadsRead]);
 
   if (!thread) {
     return (
@@ -365,27 +403,55 @@ export default function ThreadView({ thread, messages, composeOpen, composeMode,
       <div className={styles.card} onClick={(e) => isExpanded && e.stopPropagation()}>
         <div className={styles.main}>
           <div className={styles.toolbar}>
-            <button
-              className={styles.toolbarBtn}
-              onClick={() => archiveThreads([thread.id])}
-              title="Archive"
-            >
-              📥 Archive
-            </button>
-            <button
-              className={styles.toolbarBtn}
-              onClick={() => setThreadsRead([thread.id], isUnread)}
-              title={isUnread ? "Mark as read" : "Mark as unread"}
-            >
-              {isUnread ? "✉ Mark Read" : "📩 Mark Unread"}
-            </button>
-            <button
-              className={`${styles.toolbarBtn} ${isStarred ? styles.toolbarBtnStarActive : ""}`}
-              onClick={() => setThreadsFlagged([thread.id], !isStarred)}
-              title={isStarred ? "Unstar" : "Star"}
-            >
-              {isStarred ? "★ Starred" : "☆ Star"}
-            </button>
+            {isDraftsView ? (
+              <>
+                <button
+                  className={styles.toolbarBtn}
+                  onClick={onEditDraft}
+                  title="Edit this draft"
+                >
+                  ✏ Edit
+                </button>
+                <button
+                  className={styles.toolbarBtn}
+                  onClick={() => deleteThreads([thread.id])}
+                  title="Delete draft"
+                >
+                  🗑 Delete
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className={styles.toolbarBtn}
+                  onClick={() => archiveThreads([thread.id])}
+                  title="Archive"
+                >
+                  📥 Archive
+                </button>
+                <button
+                  className={styles.toolbarBtn}
+                  onClick={() => setThreadsRead([thread.id], isUnread)}
+                  title={isUnread ? "Mark as read" : "Mark as unread"}
+                >
+                  {isUnread ? "✉ Mark Read" : "📩 Mark Unread"}
+                </button>
+                <button
+                  className={`${styles.toolbarBtn} ${isStarred ? styles.toolbarBtnStarActive : ""}`}
+                  onClick={() => setThreadsFlagged([thread.id], !isStarred)}
+                  title={isStarred ? "Unstar" : "Star"}
+                >
+                  {isStarred ? "★ Starred" : "☆ Star"}
+                </button>
+                <button
+                  className={styles.toolbarBtn}
+                  onClick={() => deleteThreads([thread.id])}
+                  title="Move to Trash"
+                >
+                  🗑 Delete
+                </button>
+              </>
+            )}
           </div>
 
           <div className={styles.threadHeader}>
@@ -398,24 +464,35 @@ export default function ThreadView({ thread, messages, composeOpen, composeMode,
               >
                 {isExpanded ? "⤫ Reduce" : "⤢ Expand"}
               </button>
-              <button
-                className={styles.replyBtn}
-                onClick={() => onReplyClick("reply")}
-              >
-                Reply
-              </button>
-              <button
-                className={styles.replyBtn}
-                onClick={() => onReplyClick("replyAll")}
-              >
-                Reply All
-              </button>
-              <button
-                className={styles.replyBtn}
-                onClick={() => onReplyClick("forward")}
-              >
-                Forward
-              </button>
+              {isDraftsView ? (
+                <button
+                  className={styles.replyBtn}
+                  onClick={onEditDraft}
+                >
+                  Edit Draft
+                </button>
+              ) : (
+                <>
+                  <button
+                    className={styles.replyBtn}
+                    onClick={() => onReplyClick("reply")}
+                  >
+                    Reply
+                  </button>
+                  <button
+                    className={styles.replyBtn}
+                    onClick={() => onReplyClick("replyAll")}
+                  >
+                    Reply All
+                  </button>
+                  <button
+                    className={styles.replyBtn}
+                    onClick={() => onReplyClick("forward")}
+                  >
+                    Forward
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -453,6 +530,7 @@ export default function ThreadView({ thread, messages, composeOpen, composeMode,
               messages={messages}
               mode={composeMode ?? "reply"}
               onClose={onComposeClose}
+              initialDraftId={composeDraftId}
             />
           )}
         </div>

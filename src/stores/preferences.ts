@@ -6,6 +6,7 @@ const DEFAULT_AUTO_LABEL_NEW_EMAILS = false;
 const DEFAULT_HISTORY_FETCH_DAYS = 30;
 const DEFAULT_HISTORY_FETCH_LIMIT = 100;
 const DEFAULT_SHOW_MESSAGE_DETAILS_BY_DEFAULT = false;
+const DEFAULT_AUTO_MARK_READ_SECONDS = 0; // 0 = disabled (manual only)
 
 export interface CustomCategoryPreference {
   name: string;
@@ -19,6 +20,7 @@ interface PreferencesState {
   historyFetchLimit: number;
   customCategories: CustomCategoryPreference[];
   showMessageDetailsByDefault: boolean;
+  autoMarkReadSeconds: number;
   signatures: Record<string, string>;
   setAutoSyncIntervalMinutes: (minutes: number) => void;
   setAutoLabelNewEmails: (enabled: boolean) => void;
@@ -26,6 +28,7 @@ interface PreferencesState {
   setHistoryFetchLimit: (limit: number) => void;
   setCustomCategories: (categories: CustomCategoryPreference[]) => void;
   setShowMessageDetailsByDefault: (enabled: boolean) => void;
+  setAutoMarkReadSeconds: (seconds: number) => void;
   setSignature: (accountId: string, text: string) => void;
 }
 
@@ -36,6 +39,7 @@ interface StoredPreferences {
   historyFetchLimit?: number;
   customCategories?: CustomCategoryPreference[];
   showMessageDetailsByDefault?: boolean;
+  autoMarkReadSeconds?: number;
   signatures?: Record<string, string>;
 }
 
@@ -93,6 +97,15 @@ function loadShowMessageDetailsByDefault(): boolean {
   return parsed.showMessageDetailsByDefault;
 }
 
+function loadAutoMarkReadSeconds(): number {
+  const parsed = loadPreferences();
+  const value = parsed.autoMarkReadSeconds;
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return DEFAULT_AUTO_MARK_READ_SECONDS;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
 function loadSignatures(): Record<string, string> {
   const parsed = loadPreferences();
   if (!parsed.signatures || typeof parsed.signatures !== "object") return {};
@@ -145,6 +158,7 @@ export const usePreferencesStore = create<PreferencesState>((set) => ({
   historyFetchLimit: loadHistoryFetchLimit(),
   customCategories: loadCustomCategories(),
   showMessageDetailsByDefault: loadShowMessageDetailsByDefault(),
+  autoMarkReadSeconds: loadAutoMarkReadSeconds(),
   signatures: loadSignatures(),
   setAutoSyncIntervalMinutes: (minutes) => {
     const normalized = Number.isFinite(minutes)
@@ -181,6 +195,13 @@ export const usePreferencesStore = create<PreferencesState>((set) => ({
       persistPreferences({ signatures: next });
       return { signatures: next };
     });
+  },
+  setAutoMarkReadSeconds: (seconds) => {
+    const normalized = Number.isFinite(seconds)
+      ? Math.max(0, Math.floor(seconds))
+      : DEFAULT_AUTO_MARK_READ_SECONDS;
+    persistPreferences({ autoMarkReadSeconds: normalized });
+    set({ autoMarkReadSeconds: normalized });
   },
   setCustomCategories: (categories) => {
     const normalized = categories

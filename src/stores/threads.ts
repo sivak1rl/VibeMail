@@ -76,6 +76,7 @@ interface ThreadStore {
   setThreadsRead: (threadIds: string[], read: boolean) => Promise<void>;
   setThreadsFlagged: (threadIds: string[], flagged: boolean) => Promise<void>;
   archiveThreads: (threadIds: string[]) => Promise<void>;
+  deleteThreads: (threadIds: string[]) => Promise<void>;
   fetchHistory: (accountId: string, mailboxId: string | null, days?: number, limit?: number) => Promise<void>;
   fetchEntireMailbox: (accountId: string, mailboxId: string) => Promise<void>;
   applyThreadLabels: (
@@ -382,6 +383,12 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
 
       return { threads, threadMessages };
     });
+
+    // Refresh sidebar unread counts
+    const thread = get().threads.find((t) => ids.includes(t.id));
+    if (thread) {
+      void useMailboxStore.getState().fetchMailboxes(thread.account_id);
+    }
   },
 
   setThreadsFlagged: async (threadIds, flagged) => {
@@ -435,6 +442,36 @@ export const useThreadStore = create<ThreadStore>((set, get) => ({
     if (ids.length === 0) return;
 
     await invoke<number>("archive_threads", {
+      request: {
+        thread_ids: ids,
+      },
+    });
+
+    set((state) => {
+      const idSet = new Set(ids);
+      const threads = state.threads.filter((thread) => !idSet.has(thread.id));
+      const nextSelectedId =
+        state.selectedThreadId && idSet.has(state.selectedThreadId)
+          ? threads[0]?.id ?? null
+          : state.selectedThreadId;
+
+      if (nextSelectedId !== state.selectedThreadId) {
+        if (nextSelectedId) {
+          void get().selectThread(nextSelectedId);
+        } else {
+          set({ threadMessages: [] });
+        }
+      }
+
+      return { threads, selectedThreadId: nextSelectedId };
+    });
+  },
+
+  deleteThreads: async (threadIds) => {
+    const ids = [...new Set(threadIds)].filter(Boolean);
+    if (ids.length === 0) return;
+
+    await invoke<number>("delete_threads", {
       request: {
         thread_ids: ids,
       },

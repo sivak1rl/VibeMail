@@ -11,6 +11,7 @@ export interface Mailbox {
   uid_next: number | null;
   thread_count: number;
   unread_count: number;
+  folder_role: string | null;
 }
 
 interface MailboxStore {

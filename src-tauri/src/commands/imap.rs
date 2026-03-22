@@ -1,6 +1,6 @@
 use crate::db::{models::*, Database};
 use crate::mail::imap::format_uid_sequence_set;
-use crate::mail::{imap as mail_imap, sync::SyncManager};
+use crate::mail::{idle::IdleManager, imap as mail_imap, sync::SyncManager};
 use crate::search::SearchIndex;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use futures::TryStreamExt;
@@ -256,6 +256,7 @@ pub struct MailboxSummary {
     pub uid_next: Option<u32>,
     pub thread_count: u32,
     pub unread_count: u32,
+    pub folder_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,6 +278,7 @@ impl From<crate::db::queries::MailboxStats> for MailboxSummary {
             uid_next: value.mailbox.uid_next,
             thread_count: value.thread_count,
             unread_count: value.unread_count,
+            folder_role: value.mailbox.folder_role,
         }
     }
 }
@@ -288,6 +290,7 @@ pub async fn sync_account(
     db: State<'_, Arc<Mutex<Database>>>,
     search: State<'_, Arc<Mutex<SearchIndex>>>,
     sync_mgr: State<'_, Arc<Mutex<SyncManager>>>,
+    idle_mgr: State<'_, Arc<Mutex<IdleManager>>>,
 ) -> Result<SyncResult, String> {
     let account_id = request.account_id.clone();
     let mailbox_id = request.mailbox_id.clone();
@@ -305,28 +308,23 @@ pub async fn sync_account(
         mgr.start_sync(&account_id);
     }
 
+    // Pause IDLE while syncing to avoid contention on the mailbox.
+    {
+        let idle = idle_mgr.lock().await;
+        idle.pause(&account_id);
+    }
+
     // Clone for background task
     let db_clone = db.inner().clone();
     let search_clone = search.inner().clone();
     let sync_mgr_clone = sync_mgr.inner().clone();
+    let idle_mgr_clone = idle_mgr.inner().clone();
     let app_clone = app.clone();
     let account_id_task = account_id.clone();
     let mailbox_id_task = mailbox_id.clone();
 
-    // Check provider before spawning — Gmail always syncs via All Mail
-    let is_gmail = {
-        let db = db.lock().await;
-        db.list_accounts()
-            .ok()
-            .and_then(|accs| accs.into_iter().find(|a| a.id == account_id))
-            .map(|a| a.provider == "gmail")
-            .unwrap_or(false)
-    };
-
     tokio::spawn(async move {
         let result = if let Some(mid) = &mailbox_id_task {
-            // Specific mailbox requested — sync it directly.
-            // For Gmail, X-GM-LABELS are still fetched in sync_mailbox to populate inbox_mailboxes.
             do_sync(
                 &account_id_task,
                 Some(mid),
@@ -335,9 +333,6 @@ pub async fn sync_account(
                 app_clone,
             )
             .await
-        } else if is_gmail {
-            // Gmail with no specific mailbox: sync only [Gmail]/All Mail
-            sync_all_folders(&account_id_task, db_clone, search_clone, app_clone).await
         } else {
             sync_all_folders(&account_id_task, db_clone, search_clone, app_clone).await
         };
@@ -349,6 +344,11 @@ pub async fn sync_account(
 
         let mut mgr = sync_mgr_clone.lock().await;
         mgr.finish_sync(&account_id_task, err);
+        drop(mgr);
+
+        // Resume IDLE after sync completes.
+        let idle = idle_mgr_clone.lock().await;
+        idle.resume(&account_id_task);
     });
 
     // Return immediately to frontend
@@ -743,7 +743,7 @@ pub async fn set_threads_flagged(
         let mut uids_by_mailbox: HashMap<String, BTreeSet<u32>> = HashMap::new();
         for location in locations {
             uids_by_mailbox
-                .entry(location.mailbox_id)
+                .entry(location.source_mailbox_id)
                 .or_default()
                 .insert(location.uid);
         }
@@ -860,9 +860,9 @@ pub async fn archive_threads(
         let mut uids_by_mailbox: HashMap<String, BTreeSet<u32>> = HashMap::new();
         for location in locations {
             // Only move if not already in archive
-            if location.mailbox_id != archive_mailbox.id {
+            if location.source_mailbox_id != archive_mailbox.id {
                 uids_by_mailbox
-                    .entry(location.mailbox_id)
+                    .entry(location.source_mailbox_id)
                     .or_default()
                     .insert(location.uid);
             }
@@ -930,6 +930,132 @@ pub async fn archive_threads(
     Ok(thread_ids.len())
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteThreadsRequest {
+    pub thread_ids: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn delete_threads(
+    request: DeleteThreadsRequest,
+    db: State<'_, Arc<Mutex<Database>>>,
+) -> Result<usize, String> {
+    let thread_ids = request
+        .thread_ids
+        .into_iter()
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    if thread_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let (account, targets, trash_mailbox) = {
+        let db = db.lock().await;
+        let locations = db
+            .get_thread_message_locations(&thread_ids)
+            .map_err(|e| e.to_string())?;
+        if locations.is_empty() {
+            return Ok(0);
+        }
+
+        let account_ids = locations
+            .iter()
+            .map(|location| location.account_id.clone())
+            .collect::<BTreeSet<_>>();
+        if account_ids.len() != 1 {
+            return Err("Selected threads span multiple accounts".to_string());
+        }
+        let account_id = account_ids
+            .iter()
+            .next()
+            .cloned()
+            .ok_or_else(|| "Missing account id".to_string())?;
+
+        let account = db
+            .list_accounts()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|acct| acct.id == account_id)
+            .ok_or_else(|| "Account not found".to_string())?;
+
+        let trash_mailbox = db
+            .list_mailboxes(&account.id)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|mb| {
+                mb.folder_role.as_deref() == Some("trash")
+            })
+            .ok_or_else(|| {
+                "No Trash mailbox found.".to_string()
+            })?;
+
+        let mut uids_by_mailbox: HashMap<String, BTreeSet<u32>> = HashMap::new();
+        for location in locations {
+            if location.source_mailbox_id != trash_mailbox.id {
+                uids_by_mailbox
+                    .entry(location.source_mailbox_id)
+                    .or_default()
+                    .insert(location.uid);
+            }
+        }
+
+        if uids_by_mailbox.is_empty() {
+            return Ok(0);
+        }
+
+        let mut targets = Vec::with_capacity(uids_by_mailbox.len());
+        for (mailbox_id, uids) in uids_by_mailbox {
+            let mailbox = db
+                .get_mailbox_by_id(&account.id, &mailbox_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Mailbox not found: {}", mailbox_id))?;
+            targets.push((mailbox.name, uids.into_iter().collect::<Vec<_>>()));
+        }
+
+        (account, targets, trash_mailbox)
+    };
+
+    let trash_name = &trash_mailbox.name;
+    let mut session = mail_imap::connect_imap(&account)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    for (mailbox_name, uids) in targets {
+        session
+            .select(&mailbox_name)
+            .await
+            .map_err(|e| e.to_string())?;
+        for chunk in uids.chunks(250) {
+            let sequence_set = format_uid_sequence_set(chunk);
+            session
+                .uid_copy(&sequence_set, trash_name)
+                .await
+                .map_err(|e| e.to_string())?;
+            let mut updates = session
+                .uid_store(&sequence_set, "+FLAGS.SILENT (\\Deleted)")
+                .await
+                .map_err(|e| e.to_string())?;
+            while updates
+                .try_next()
+                .await
+                .map_err(|e| e.to_string())?
+                .is_some()
+            {}
+        }
+        let expunged = session.expunge().await.map_err(|e| e.to_string())?;
+        futures::pin_mut!(expunged);
+        while expunged
+            .try_next()
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {}
+    }
+
+    let _ = session.logout().await;
+    Ok(thread_ids.len())
+}
+
 #[tauri::command]
 pub async fn set_threads_read(
     request: SetThreadsReadRequest,
@@ -976,7 +1102,7 @@ pub async fn set_threads_read(
         let mut uids_by_mailbox: HashMap<String, BTreeSet<u32>> = HashMap::new();
         for location in locations {
             uids_by_mailbox
-                .entry(location.mailbox_id)
+                .entry(location.source_mailbox_id)
                 .or_default()
                 .insert(location.uid);
         }
@@ -1144,6 +1270,38 @@ pub async fn wipe_local_data(
         let search = search.lock().await;
         search.clear_all().map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_idle(
+    account_id: String,
+    app: AppHandle,
+    db: State<'_, Arc<Mutex<Database>>>,
+    search: State<'_, Arc<Mutex<SearchIndex>>>,
+    idle_mgr: State<'_, Arc<Mutex<IdleManager>>>,
+) -> Result<(), String> {
+    let account = {
+        let db = db.lock().await;
+        db.list_accounts()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|a| a.id == account_id)
+            .ok_or_else(|| "Account not found".to_string())?
+    };
+
+    let mut idle = idle_mgr.lock().await;
+    idle.start(account, db.inner().clone(), search.inner().clone(), app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_idle(
+    account_id: String,
+    idle_mgr: State<'_, Arc<Mutex<IdleManager>>>,
+) -> Result<(), String> {
+    let mut idle = idle_mgr.lock().await;
+    idle.stop(&account_id).await;
     Ok(())
 }
 

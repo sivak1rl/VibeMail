@@ -1,3 +1,4 @@
+pub mod idle;
 pub mod imap;
 pub mod parser;
 pub mod smtp;
