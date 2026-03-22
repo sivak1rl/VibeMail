@@ -696,20 +696,20 @@ async fn sync_gmail_category_labels_for_account(
         for location in locations {
             if let Some(label) = label_by_thread.get(&location.thread_id) {
                 remove_targets
-                    .entry(location.mailbox_id.clone())
+                    .entry(location.source_mailbox_id.clone())
                     .or_default()
                     .insert(location.uid);
                 add_targets
-                    .entry((location.mailbox_id.clone(), label.clone()))
+                    .entry((location.source_mailbox_id.clone(), label.clone()))
                     .or_default()
                     .insert(location.uid);
 
-                if !mailbox_names.contains_key(&location.mailbox_id) {
+                if !mailbox_names.contains_key(&location.source_mailbox_id) {
                     let mailbox = db
-                        .get_mailbox_by_id(&account.id, &location.mailbox_id)
+                        .get_mailbox_by_id(&account.id, &location.source_mailbox_id)
                         .map_err(|e| e.to_string())?
-                        .ok_or_else(|| format!("Mailbox not found: {}", location.mailbox_id))?;
-                    mailbox_names.insert(location.mailbox_id.clone(), mailbox.name);
+                        .ok_or_else(|| format!("Mailbox not found: {}", location.source_mailbox_id))?;
+                    mailbox_names.insert(location.source_mailbox_id.clone(), mailbox.name);
                 }
             }
         }

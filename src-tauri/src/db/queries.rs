@@ -15,7 +15,7 @@ pub struct MailboxStats {
 pub struct ThreadMessageLocation {
     pub thread_id: String,
     pub account_id: String,
-    pub mailbox_id: String,
+    pub source_mailbox_id: String,
     pub uid: u32,
 }
 
@@ -215,10 +215,23 @@ impl Database {
         }
     }
 
+    pub fn get_mailbox_by_role(&self, account_id: &str, role: &str) -> Result<Option<Mailbox>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, account_id, name, delimiter, flags, uid_validity, uid_next, last_synced_at, thread_count, unread_count, folder_role
+             FROM mailboxes WHERE account_id=?1 AND folder_role=?2 LIMIT 1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![account_id, role])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(Self::row_to_mailbox(row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn get_mailbox_oldest_date(&self, mailbox_id: &str) -> Result<Option<DateTime<Utc>>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT MIN(date) FROM messages WHERE mailbox_id=?1")?;
+            .prepare("SELECT MIN(date) FROM messages WHERE source_mailbox_id=?1")?;
         let date: Option<i64> = stmt.query_row([mailbox_id], |row| row.get(0))?;
         Ok(date.map(|ts| Utc.timestamp_opt(ts, 0).unwrap()))
     }
@@ -226,7 +239,7 @@ impl Database {
     pub fn upsert_message(&self, msg: &Message) -> Result<()> {
         self.conn.execute(
             r#"INSERT INTO messages
-               (id, account_id, mailbox_id, uid, message_id, thread_id, subject, "from", "to", cc,
+               (id, account_id, source_mailbox_id, uid, message_id, thread_id, subject, "from", "to", cc,
                 date, body_text, body_html, references_ids, in_reply_to, flags, is_read, is_flagged,
                 has_attachments, triage_score, ai_summary)
                VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)
@@ -244,7 +257,7 @@ impl Database {
             rusqlite::params![
                 msg.id,
                 msg.account_id,
-                msg.mailbox_id,
+                msg.source_mailbox_id,
                 msg.uid as i64,
                 msg.message_id,
                 msg.thread_id,
@@ -266,12 +279,12 @@ impl Database {
             ],
         )?;
 
-        // Sync message_mailboxes join table (source of truth for mailbox membership)
+        // Sync message_mailboxes join table (source of truth for folder membership)
         self.conn.execute(
             "DELETE FROM message_mailboxes WHERE message_id = ?1",
             [&msg.id],
         )?;
-        for mb in &msg.inbox_mailboxes {
+        for mb in &msg.mailbox_ids {
             self.conn.execute(
                 "INSERT OR IGNORE INTO message_mailboxes (message_id, mailbox_id) VALUES (?1, ?2)",
                 rusqlite::params![msg.id, mb],
@@ -345,12 +358,23 @@ impl Database {
         let limit = limit as i64;
         let offset = offset as i64;
         let threads = if let Some(mailbox_id) = mailbox_id {
+            // When viewing All Mail, exclude threads whose only real mailbox is Drafts.
+            // For any other mailbox, just show its threads directly.
             let mut stmt = self.conn.prepare(
                 r#"SELECT t.id, t.account_id, t.subject, t.participant_ids, t.message_count,
                    t.unread_count, t.is_flagged, t.has_attachments, t.last_date, t.last_from, t.triage_score, t.labels
                    FROM threads t
                    JOIN thread_mailboxes tm ON tm.thread_id = t.id AND tm.mailbox_id = ?2
+                   JOIN mailboxes mb_sel ON mb_sel.id = ?2
                    WHERE t.account_id=?1
+                   AND (
+                     COALESCE(mb_sel.folder_role, '') != 'all_mail'
+                     OR NOT EXISTS (
+                       SELECT 1 FROM thread_mailboxes tm2
+                       JOIN mailboxes mb2 ON mb2.id = tm2.mailbox_id
+                       WHERE tm2.thread_id = t.id AND mb2.folder_role = 'drafts'
+                     )
+                   )
                    ORDER BY t.last_date DESC, t.id LIMIT ?3 OFFSET ?4"#,
             )?;
             let rows = stmt.query_map(
@@ -474,7 +498,7 @@ impl Database {
 
     pub fn get_thread_messages(&self, thread_id: &str) -> Result<Vec<Message>> {
         let mut stmt = self.conn.prepare(
-            r#"SELECT id, account_id, mailbox_id, uid, message_id, thread_id, subject,
+            r#"SELECT id, account_id, source_mailbox_id, uid, message_id, thread_id, subject,
                "from", "to", cc, date, body_text, body_html, references_ids, in_reply_to,
                flags, is_read, is_flagged, has_attachments, triage_score, ai_summary
                FROM messages WHERE thread_id=?1 ORDER BY date ASC"#,
@@ -487,7 +511,7 @@ impl Database {
                 Ok(Message {
                     id: row.get(0)?,
                     account_id: row.get(1)?,
-                    mailbox_id: row.get(2)?,
+                    source_mailbox_id: row.get(2)?,
                     uid: row.get::<_, i64>(3)? as u32,
                     message_id: row.get(4)?,
                     thread_id: row.get(5)?,
@@ -512,7 +536,7 @@ impl Database {
                     has_attachments: row.get::<_, i64>(18)? != 0,
                     triage_score: row.get(19)?,
                     ai_summary: row.get(20)?,
-                    inbox_mailboxes: Vec::new(),
+                    mailbox_ids: Vec::new(),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -738,10 +762,10 @@ impl Database {
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT thread_id, account_id, mailbox_id, uid
+            "SELECT thread_id, account_id, source_mailbox_id, uid
              FROM messages
              WHERE thread_id IN ({})
-             ORDER BY thread_id, account_id, mailbox_id, uid",
+             ORDER BY thread_id, account_id, source_mailbox_id, uid",
             placeholders
         );
 
@@ -754,7 +778,7 @@ impl Database {
             Ok(ThreadMessageLocation {
                 thread_id: row.get(0)?,
                 account_id: row.get(1)?,
-                mailbox_id: row.get(2)?,
+                source_mailbox_id: row.get(2)?,
                 uid: row.get::<_, i64>(3)? as u32,
             })
         })?;
@@ -929,8 +953,8 @@ impl Database {
 
     pub fn get_messages_missing_attachments(&self, mailbox_id: &str) -> Result<Vec<u32>> {
         let mut stmt = self.conn.prepare(
-            "SELECT uid FROM messages 
-             WHERE mailbox_id=?1 AND has_attachments=1
+            "SELECT uid FROM messages
+             WHERE source_mailbox_id=?1 AND has_attachments=1
              AND id NOT IN (SELECT DISTINCT message_id FROM attachments)",
         )?;
         let rows = stmt.query_map([mailbox_id], |row| row.get::<_, i64>(0))?;
@@ -1194,6 +1218,40 @@ impl Database {
         self.conn.execute("DELETE FROM drafts WHERE id=?1", [id])?;
         Ok(())
     }
+
+    pub fn list_drafts(&self, account_id: &str) -> Result<Vec<Draft>> {
+        let mut stmt = self.conn.prepare(
+            r#"SELECT id, account_id, mode, to_addrs, cc_addrs, bcc_addrs, subject,
+                      body_text, body_html, in_reply_to, thread_id, updated_at
+               FROM drafts WHERE account_id=?1 ORDER BY updated_at DESC"#,
+        )?;
+        let rows = stmt.query_map([account_id], |row| {
+            Ok(Draft {
+                id: row.get(0)?,
+                account_id: row.get(1)?,
+                mode: row.get(2)?,
+                to_addrs: row.get(3)?,
+                cc_addrs: row.get(4)?,
+                bcc_addrs: row.get(5)?,
+                subject: row.get(6)?,
+                body_text: row.get(7)?,
+                body_html: row.get(8)?,
+                in_reply_to: row.get(9)?,
+                thread_id: row.get(10)?,
+                updated_at: row.get(11)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn count_drafts(&self, account_id: &str) -> Result<u32> {
+        let count: u32 = self.conn.query_row(
+            "SELECT COUNT(*) FROM drafts WHERE account_id=?1",
+            [account_id],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
 }
 
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -1389,7 +1447,7 @@ mod tests {
         let build_message = |id: &str, thread_id: &str, mailbox_id: &str| Message {
             id: id.to_string(),
             account_id: account.id.clone(),
-            mailbox_id: mailbox_id.to_string(),
+            source_mailbox_id: mailbox_id.to_string(),
             uid: 1,
             message_id: Some(format!("<{}>", id)),
             thread_id: Some(thread_id.to_string()),
@@ -1408,7 +1466,7 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
-            inbox_mailboxes: vec![mailbox_id.to_string()],
+            mailbox_ids: vec![mailbox_id.to_string()],
         };
         db.upsert_message(&build_message("msg-inbox", &inbox_thread.id, &inbox.id))
             .expect("inbox message");
@@ -1501,7 +1559,7 @@ mod tests {
         let unread_message = Message {
             id: "msg-unread".to_string(),
             account_id: account.id.clone(),
-            mailbox_id: inbox.id.clone(),
+            source_mailbox_id: inbox.id.clone(),
             uid: 1,
             message_id: Some("<msg-unread>".to_string()),
             thread_id: Some(unread_thread.id.clone()),
@@ -1520,12 +1578,12 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
-            inbox_mailboxes: vec![inbox.id.clone()],
+            mailbox_ids: vec![inbox.id.clone()],
         };
         let read_message = Message {
             id: "msg-read".to_string(),
             account_id: account.id.clone(),
-            mailbox_id: inbox.id.clone(),
+            source_mailbox_id: inbox.id.clone(),
             uid: 2,
             message_id: Some("<msg-read>".to_string()),
             thread_id: Some(read_thread.id.clone()),
@@ -1544,7 +1602,7 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
-            inbox_mailboxes: vec![inbox.id.clone()],
+            mailbox_ids: vec![inbox.id.clone()],
         };
         db.upsert_message(&unread_message).expect("unread message");
         db.upsert_message(&read_message).expect("read message");
@@ -1657,7 +1715,7 @@ mod tests {
             db.upsert_message(&Message {
                 id: id.to_string(),
                 account_id: account.id.clone(),
-                mailbox_id: mailbox_id.to_string(),
+                source_mailbox_id: mailbox_id.to_string(),
                 uid,
                 message_id: Some(format!("<{}>", id)),
                 thread_id: Some(thread_id.to_string()),
@@ -1676,7 +1734,7 @@ mod tests {
                 has_attachments: false,
                 triage_score: None,
                 ai_summary: None,
-                inbox_mailboxes: vec![mailbox_id.to_string()],
+                mailbox_ids: vec![mailbox_id.to_string()],
             })
             .expect("message");
         }

@@ -294,6 +294,8 @@ interface Props {
   onClose: () => void;
   expanded?: boolean;
   onExpandChange?: (expanded: boolean) => void;
+  /** Override the draft ID used for auto-save/restore (e.g. when resuming from DraftList) */
+  initialDraftId?: string;
 }
 
 const NEW_KEY = "__new__";
@@ -385,11 +387,12 @@ export default function Compose({
   onClose,
   expanded = false,
   onExpandChange,
+  initialDraftId,
 }: Props) {
   const { activeAccountId, accounts } = useAccountStore();
   const { draftByThread, draftStreaming, draftReply, draftNew, config } = useAiStore();
   const { signatures } = usePreferencesStore();
-  const { saveDraft, loadDraft, deleteDraft } = useDraftStore();
+  const { saveDraft, loadDraft, deleteDraft, syncDraftToImap, deleteDraftFromImap } = useDraftStore();
   const contacts = useContacts();
 
   const mode: ComposeMode = modeProp ?? (thread ? "reply" : "new");
@@ -459,7 +462,7 @@ export default function Compose({
   const [activeDraftKey, setActiveDraftKey] = useState(mode !== "new" && thread ? thread.id : NEW_KEY);
 
   // Stable draft ID for this compose session
-  const draftId = mode === "new" ? "draft_new" : `draft_${mode}_${thread?.id ?? ""}`;
+  const draftId = initialDraftId ?? (mode === "new" ? "draft_new" : `draft_${mode}_${thread?.id ?? ""}`);
 
 
   const insertAt = useRef<number>(0);
@@ -549,6 +552,16 @@ export default function Compose({
     return () => { if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [to, cc, bcc, subject, body]);
+
+  // Sync draft to IMAP on unmount (close compose)
+  useEffect(() => {
+    return () => {
+      if (body.trim() || to.trim() || subject.trim()) {
+        void syncDraftToImap(draftId);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Live preview body while reviewing proofread changes
   const bodyDisplay = proofreadChunks
@@ -686,6 +699,7 @@ export default function Compose({
           attachments: attachmentData.length > 0 ? attachmentData : null,
         },
       });
+      void deleteDraftFromImap(draftId);
       void deleteDraft(draftId);
       onClose();
     } catch (e) {

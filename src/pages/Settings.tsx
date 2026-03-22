@@ -36,6 +36,8 @@ export default function Settings({ onBack, onReset }: Props) {
     setCustomCategories,
     signatures,
     setSignature,
+    autoMarkReadSeconds,
+    setAutoMarkReadSeconds,
   } = usePreferencesStore();
 
   const [dbCounts, setDbCounts] = useState<Record<string, number>>({});
@@ -294,6 +296,18 @@ export default function Settings({ onBack, onReset }: Props) {
                 onChange={(e) => setShowMessageDetailsByDefault(e.target.checked)}
               />
               Show message header details (From, To, Cc, Date) by default when opening a message
+            </label>
+
+            <label className={styles.label} style={{ marginTop: "16px" }}>
+              Auto-mark as read (seconds after opening, 0 = manual only)
+              <input
+                className={styles.input}
+                type="number"
+                min={0}
+                step={1}
+                value={autoMarkReadSeconds}
+                onChange={(e) => setAutoMarkReadSeconds(Number(e.target.value))}
+              />
             </label>
 
             <label className={styles.label} style={{ marginTop: "16px" }}>

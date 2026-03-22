@@ -407,7 +407,7 @@ pub fn parse_fetches(
                         }
                     }
                     // System labels → resolve to mailbox IDs for inbox_mailboxes
-                    msg.inbox_mailboxes = raw_labels
+                    msg.mailbox_ids = raw_labels
                         .iter()
                         .filter_map(|label| {
                             let resolved = gmail_label_to_mailbox_name(label);
@@ -417,15 +417,22 @@ pub fn parse_fetches(
                             resolved.map(|mb_name| format!("{}:{}", account.id, mb_name))
                         })
                         .collect();
-                    println!(">>> INBOX_MAILBOXES uid={}: {:?}", uid, msg.inbox_mailboxes);
+                    println!(">>> INBOX_MAILBOXES uid={}: {:?}", uid, msg.mailbox_ids);
                 } else {
                     println!(">>> GMAIL LABELS uid={}: NO LABELS RETURNED", uid);
                 }
                 // Always include the mailbox we're syncing from.
-                // For Gmail All Mail: ensures messages appear under All Mail in sidebar.
-                // For non-Gmail: sets the single canonical mailbox.
-                if !msg.inbox_mailboxes.contains(&mailbox.id) {
-                    msg.inbox_mailboxes.push(mailbox.id.clone());
+                if !msg.mailbox_ids.contains(&mailbox.id) {
+                    msg.mailbox_ids.push(mailbox.id.clone());
+                }
+                // Gmail: every message implicitly belongs to All Mail,
+                // but X-GM-LABELS never includes an "All Mail" label.
+                // Add it explicitly so threads appear in All Mail view.
+                if account.provider == "gmail" {
+                    let all_mail_id = format!("{}:[Gmail]/All Mail", account.id);
+                    if !msg.mailbox_ids.contains(&all_mail_id) {
+                        msg.mailbox_ids.push(all_mail_id);
+                    }
                 }
                 results.push((msg, atts));
             }

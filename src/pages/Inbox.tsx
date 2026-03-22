@@ -5,8 +5,10 @@ import { useThreadStore } from "../stores/threads";
 import { useSearchStore } from "../stores/search";
 import { useAiStore } from "../stores/ai";
 import { usePreferencesStore } from "../stores/preferences";
+import { useDraftStore } from "../stores/drafts";
 import { buildMailboxTree, type MailboxTreeNode } from "../utils/mailbox";
 import InboxList from "../components/InboxList/InboxList";
+import DraftList from "../components/DraftList/DraftList";
 import ThreadView from "../components/ThreadView/ThreadView";
 import SearchBar from "../components/SearchBar/SearchBar";
 import Compose, { type ComposeMode } from "../components/Compose/Compose";
@@ -57,6 +59,10 @@ export default function Inbox({ onSettings }: Props) {
   const { results: searchResults, query: searchQuery, clear: clearSearch } = useSearchStore();
   const { loadConfig, summarizeThreads, categorizeThreads, batchSummarizing, batchCategorizing } = useAiStore();
   const { autoLabelNewEmails, customCategories, historyFetchDays, historyFetchLimit } = usePreferencesStore();
+  const { drafts, draftCount, fetchDrafts, fetchDraftCount, saveDraft } = useDraftStore();
+  const [selectedDraftId, setSelectedDraftId] = useState<string | null>(null);
+  const [openDraft, setOpenDraft] = useState<import("../stores/drafts").DraftData | null>(null);
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
 
   const openRoundup = useCallback(async () => {
     if (!activeAccountId) return;
@@ -84,6 +90,26 @@ export default function Inbox({ onSettings }: Props) {
   const [showHelpModal, setShowHelpModal] = useState(false);
   const lastSyncingRef = useRef(false);
   const searchBarRef = useRef<HTMLInputElement>(null);
+
+  const selectedMailbox = useMemo(
+    () => mailboxes.find((m) => m.id === selectedMailboxId),
+    [mailboxes, selectedMailboxId],
+  );
+  const isDraftsView = selectedMailbox?.folder_role === "drafts";
+
+  // Fetch drafts when Drafts folder is selected
+  useEffect(() => {
+    if (isDraftsView && activeAccountId) {
+      void fetchDrafts(activeAccountId);
+    }
+  }, [isDraftsView, activeAccountId, fetchDrafts]);
+
+  // Keep draft count updated for sidebar badge
+  useEffect(() => {
+    if (activeAccountId) {
+      void fetchDraftCount(activeAccountId);
+    }
+  }, [activeAccountId, fetchDraftCount]);
 
   useEffect(() => {
     loadConfig();
@@ -480,12 +506,17 @@ export default function Inbox({ onSettings }: Props) {
                 <span>{node.name}</span>
                 <span
                   className={`${styles.navBadge} ${
-                    !node.mailbox || node.mailbox.unread_count === 0
-                      ? styles.navBadgeEmpty
-                      : ""
+                    (() => {
+                      const count = node.mailbox?.folder_role === "drafts"
+                        ? draftCount
+                        : (node.mailbox?.unread_count ?? 0);
+                      return count === 0 ? styles.navBadgeEmpty : "";
+                    })()
                   }`}
                 >
-                  {node.mailbox?.unread_count ?? 0}
+                  {node.mailbox?.folder_role === "drafts"
+                    ? draftCount
+                    : (node.mailbox?.unread_count ?? 0)}
                 </span>
               </>
             )}
@@ -588,88 +619,123 @@ export default function Inbox({ onSettings }: Props) {
               onClear={() => setShowSearch(false)}
             />
           </div>
-          <div className={styles.controls}>
-            <button
-              className={styles.roundupBtn}
-              onClick={openRoundup}
-              disabled={!activeAccountId}
-              title="Email roundup digest"
-            >
-              Roundup
-            </button>
-            <button
-              className={`${styles.focusBtn} ${focusMode ? styles.focusActive : ""}`}
-              onClick={() => setFocusMode(!focusMode)}
-              title="Focus: show only important mail"
-            >
-              {focusMode ? "Focus ✓" : "Focus"}
-            </button>
-            <button
-              className={styles.syncBtn}
-              onClick={handleSync}
-              disabled={syncing}
-              title="Sync current mailbox"
-            >
-              {syncing ? "⟳" : "↻"}
-            </button>
-            <button
-              className={styles.syncAllBtn}
-              onClick={handleSyncAll}
-              disabled={syncing}
-              title="Sync all folders"
-            >
-              {syncing ? "Syncing All…" : "Sync All"}
-            </button>
-          </div>
-          <div className={styles.batchRow}>
-            <button
-              className={styles.batchBtn}
-              onClick={handleSummarizeSelected}
-              disabled={selectedThreadIds.length === 0 || batchSummarizing}
-              title="Summarize selected threads"
-            >
-              {batchSummarizing ? "Summarizing…" : `Summarize Selected (${selectedThreadIds.length})`}
-            </button>
-            <button
-              className={styles.batchBtn}
-              onClick={handleSummarizeUnread}
-              disabled={allUnreadDisplayedIds.length === 0 || batchSummarizing}
-              title="Summarize all unread threads"
-            >
-              Summarize Unread ({allUnreadDisplayedIds.length})
-            </button>
-            <button
-              className={styles.batchBtn}
-              onClick={handleCategorizeSelected}
-              disabled={selectedThreadIds.length === 0 || batchCategorizing}
-              title="Apply category labels to selected threads"
-            >
-              {batchCategorizing ? "Labeling…" : `Label Selected (${selectedThreadIds.length})`}
-            </button>
-            <button
-              className={styles.batchBtn}
-              onClick={handleCategorizeUnread}
-              disabled={allUnreadDisplayedIds.length === 0 || batchCategorizing}
-              title="Apply category labels to all unread threads"
-            >
-              Label Unread ({allUnreadDisplayedIds.length})
-            </button>
-            <button
-              className={styles.batchBtn}
-              onClick={handleToggleRead}
-              disabled={selectedThreadIds.length === 0}
-              title="Toggle read state for selected threads"
-            >
-              {selectedThreadIds.length === 0
-                ? "Mark Read/Unread"
-                : shouldMarkRead
-                ? `Mark Read (${selectedUnreadThreads.length})`
-                : "Mark Unread"}
-            </button>
-          </div>
+          {isDraftsView ? (
+            <>
+              <div className={styles.controls}>
+                <button
+                  className={styles.syncBtn}
+                  onClick={() => { setShowNewCompose(true); setOpenDraft(null); }}
+                  title="Compose new email"
+                >
+                  + Compose
+                </button>
+                <button
+                  className={styles.syncBtn}
+                  onClick={handleSync}
+                  disabled={syncing}
+                  title="Sync drafts folder"
+                >
+                  {syncing ? "⟳" : "↻"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className={styles.controls}>
+                <button
+                  className={styles.roundupBtn}
+                  onClick={openRoundup}
+                  disabled={!activeAccountId}
+                  title="Email roundup digest"
+                >
+                  Roundup
+                </button>
+                <button
+                  className={`${styles.focusBtn} ${focusMode ? styles.focusActive : ""}`}
+                  onClick={() => setFocusMode(!focusMode)}
+                  title="Focus: show only important mail"
+                >
+                  {focusMode ? "Focus ✓" : "Focus"}
+                </button>
+                <button
+                  className={styles.syncBtn}
+                  onClick={handleSync}
+                  disabled={syncing}
+                  title="Sync current mailbox"
+                >
+                  {syncing ? "⟳" : "↻"}
+                </button>
+                <button
+                  className={styles.syncAllBtn}
+                  onClick={handleSyncAll}
+                  disabled={syncing}
+                  title="Sync all folders"
+                >
+                  {syncing ? "Syncing All…" : "Sync All"}
+                </button>
+              </div>
+              <div className={styles.batchRow}>
+                <button
+                  className={styles.batchBtn}
+                  onClick={handleSummarizeSelected}
+                  disabled={selectedThreadIds.length === 0 || batchSummarizing}
+                  title="Summarize selected threads"
+                >
+                  {batchSummarizing ? "Summarizing…" : `Summarize Selected (${selectedThreadIds.length})`}
+                </button>
+                <button
+                  className={styles.batchBtn}
+                  onClick={handleSummarizeUnread}
+                  disabled={allUnreadDisplayedIds.length === 0 || batchSummarizing}
+                  title="Summarize all unread threads"
+                >
+                  Summarize Unread ({allUnreadDisplayedIds.length})
+                </button>
+                <button
+                  className={styles.batchBtn}
+                  onClick={handleCategorizeSelected}
+                  disabled={selectedThreadIds.length === 0 || batchCategorizing}
+                  title="Apply category labels to selected threads"
+                >
+                  {batchCategorizing ? "Labeling…" : `Label Selected (${selectedThreadIds.length})`}
+                </button>
+                <button
+                  className={styles.batchBtn}
+                  onClick={handleCategorizeUnread}
+                  disabled={allUnreadDisplayedIds.length === 0 || batchCategorizing}
+                  title="Apply category labels to all unread threads"
+                >
+                  Label Unread ({allUnreadDisplayedIds.length})
+                </button>
+                <button
+                  className={styles.batchBtn}
+                  onClick={handleToggleRead}
+                  disabled={selectedThreadIds.length === 0}
+                  title="Toggle read state for selected threads"
+                >
+                  {selectedThreadIds.length === 0
+                    ? "Mark Read/Unread"
+                    : shouldMarkRead
+                    ? `Mark Read (${selectedUnreadThreads.length})`
+                    : "Mark Unread"}
+                </button>
+              </div>
+            </>
+          )}
           {syncError && <div className={styles.syncError}>{syncError}</div>}
         </div>
 
+        {isDraftsView && drafts.length > 0 && (
+          <DraftList
+            drafts={drafts}
+            selectedId={selectedDraftId}
+            onSelect={(id) => { setSelectedDraftId(id); clearThread(); }}
+            onOpen={(draft) => {
+              setOpenDraft(draft);
+              setShowNewCompose(true);
+            }}
+          />
+        )}
         <InboxList
           scrollKey={selectedMailboxId ?? "all"}
           threads={displayedThreads}
@@ -694,8 +760,42 @@ export default function Inbox({ onSettings }: Props) {
           messages={threadMessages}
           composeOpen={replyComposeMode !== null}
           composeMode={replyComposeMode ?? "reply"}
-          onComposeClose={() => setReplyComposeMode(null)}
+          onComposeClose={() => {
+            setReplyComposeMode(null);
+            setEditingDraftId(null);
+            // Refresh drafts after editing
+            if (isDraftsView && activeAccountId) {
+              void fetchDraftCount(activeAccountId);
+              void fetchDrafts(activeAccountId);
+            }
+          }}
           onReplyClick={setReplyComposeMode}
+          isDraftsView={isDraftsView}
+          composeDraftId={editingDraftId ?? undefined}
+          onEditDraft={() => {
+            if (!selectedThread || threadMessages.length === 0) return;
+            const msg = threadMessages[threadMessages.length - 1];
+            const fmtAddr = (a: { name: string | null; email: string }) =>
+              a.name ? `${a.name} <${a.email}>` : a.email;
+            const draftId = `draft_edit_${selectedThread.id}`;
+            const payload = {
+              account_id: activeAccountId ?? null,
+              mode: msg.in_reply_to ? "reply" as const : "new" as const,
+              to_addrs: (msg.to ?? []).map(fmtAddr).join(", "),
+              cc_addrs: (msg.cc ?? []).map(fmtAddr).join(", "),
+              bcc_addrs: "",
+              subject: msg.subject ?? "",
+              body_text: msg.body_text ?? "",
+              body_html: msg.body_html ?? null,
+              in_reply_to: msg.in_reply_to ?? null,
+              thread_id: selectedThread.id,
+            };
+            // Save to local drafts DB first so Compose can load it
+            void saveDraft(draftId, payload).then(() => {
+              setEditingDraftId(draftId);
+              setReplyComposeMode(payload.mode);
+            });
+          }}
         />
       </div>
 
@@ -711,8 +811,19 @@ export default function Inbox({ onSettings }: Props) {
           >
             <Compose
               expanded={newComposeExpanded}
-              onClose={() => { setShowNewCompose(false); setNewComposeExpanded(false); }}
+              onClose={() => {
+                setShowNewCompose(false);
+                setNewComposeExpanded(false);
+                setOpenDraft(null);
+                // Refresh draft count/list after compose closes
+                if (activeAccountId) {
+                  void fetchDraftCount(activeAccountId);
+                  if (isDraftsView) void fetchDrafts(activeAccountId);
+                }
+              }}
               onExpandChange={setNewComposeExpanded}
+              mode={openDraft?.mode as ComposeMode | undefined}
+              initialDraftId={openDraft?.id}
             />
           </div>
         </div>

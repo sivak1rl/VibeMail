@@ -223,7 +223,7 @@ mod tests {
         Message {
             id: id.to_string(),
             account_id: "acc1".to_string(),
-            mailbox_id: "mb1".to_string(),
+            source_mailbox_id: "mb1".to_string(),
             uid: 1,
             message_id: Some(format!("<{}>", id)),
             thread_id: None,
@@ -245,7 +245,7 @@ mod tests {
             has_attachments: false,
             triage_score: None,
             ai_summary: None,
-            inbox_mailboxes: Vec::new(),
+            mailbox_ids: Vec::new(),
         }
     }
 

@@ -38,7 +38,9 @@ pub struct EmailAddress {
 pub struct Message {
     pub id: String,
     pub account_id: String,
-    pub mailbox_id: String,
+    /// The IMAP mailbox this message was fetched from (UID namespace).
+    /// NOT the logical folder — use `message_mailboxes` for folder membership.
+    pub source_mailbox_id: String,
     pub uid: u32,
     pub message_id: Option<String>,
     pub thread_id: Option<String>,
@@ -57,10 +59,9 @@ pub struct Message {
     pub has_attachments: bool,
     pub triage_score: Option<f64>,
     pub ai_summary: Option<String>,
-    /// JSON array of mailbox IDs this message belongs to.
-    /// For Gmail: derived from X-GM-LABELS. For other providers: [mailbox_id].
-    /// Always populated; never NULL.
-    pub inbox_mailboxes: Vec<String>,
+    /// Mailbox IDs this message belongs to (folder membership).
+    /// Synced to the `message_mailboxes` join table on upsert.
+    pub mailbox_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
