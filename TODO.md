@@ -43,6 +43,9 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 - [x] Reply/Reply All/Forward with quoted original message
 - [x] Attachment upload via drag-and-drop (browse or drop, shown in list, sent as MIME attachments)
 - [x] Draft auto-save to local DB (2s debounce, restore on reopen, delete on send)
+- [x] Draft sync to IMAP server (Drafts folder, auto-append on compose close, delete on send)
+- [x] Drafts folder browser — browse local auto-saved drafts with inline editing
+- [x] Edit IMAP-synced drafts inline in preview pane
 - [x] CC/BCC fields
 - [x] Contact autocomplete from message history
 - [x] Signature configuration per account
