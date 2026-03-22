@@ -50,9 +50,9 @@ Command registration happens in `src-tauri/src/lib.rs` via `tauri::generate_hand
 
 | Module | Purpose |
 |--------|---------|
-| `commands/` | Tauri IPC handlers: `accounts`, `imap`, `smtp`, `ai`, `search` |
+| `commands/` | Tauri IPC handlers: `accounts`, `imap`, `smtp`, `ai`, `search`, `drafts`, `general` |
 | `db/` | SQLite via rusqlite — `schema.rs` (tables + migrations), `models.rs` (structs), `queries.rs` (CRUD) |
-| `mail/` | `imap.rs` (async-imap with XOAuth2), `smtp.rs` (lettre), `parser.rs` (mail-parser), `threading.rs` (JWZ algorithm), `sync.rs` (state tracker) |
+| `mail/` | `imap.rs` (async-imap with XOAuth2 + IDLE), `smtp.rs` (lettre), `parser.rs` (mail-parser), `threading.rs` (JWZ algorithm), `idle.rs` (IMAP IDLE push notifications), `sync.rs` (state tracker) |
 | `ai/` | `provider.rs` (AiProvider trait), `router.rs` (task→provider routing), `ollama.rs`, `openai_compat.rs`, `stream.rs` (token streaming to frontend), `tools.rs` (output parsing + system prompts) |
 | `auth/` | `oauth.rs` (PKCE flow on port 7887), `keychain.rs` (file-based token store at `~/.local/share/com.vibemail.app/tokens.json`) |
 | `search/` | `index.rs` (Tantivy full-text search) + FTS5 virtual table in SQLite |
@@ -62,18 +62,19 @@ Command registration happens in `src-tauri/src/lib.rs` via `tauri::generate_hand
 | Layer | Key Files |
 |-------|-----------|
 | **Pages** | `Inbox.tsx` (3-pane layout: sidebar + list + thread), `Settings.tsx`, `AccountSetup.tsx` |
-| **Stores** | `threads.ts` (sync/pagination/selection), `ai.ts` (streaming summaries/drafts), `search.ts` (FTS + semantic), `accounts.ts`, `mailboxes.ts`, `preferences.ts` (localStorage-persisted) |
-| **Components** | `InboxList/` (thread list), `ThreadView/` (message viewer with sandboxed iframe), `SearchBar/`, `AIPanel/`, `Compose/` |
+| **Stores** | `threads.ts` (sync/pagination/selection), `ai.ts` (streaming summaries/drafts), `search.ts` (FTS + semantic), `drafts.ts` (local + IMAP draft management), `accounts.ts`, `mailboxes.ts`, `preferences.ts` (localStorage-persisted) |
+| **Components** | `InboxList/` (thread list), `DraftList/` (local drafts), `ThreadView/` (message viewer with sandboxed iframe), `SearchBar/`, `AIPanel/`, `Compose/` |
 
 Routing is state-based in `App.tsx` (`Page = "inbox" | "settings" | "setup"`), not URL-based.
 
 ### Shared State Model
 
-The Rust backend manages four global states injected via `State<'_>`:
+The Rust backend manages five global states injected via `State<'_>`:
 - `Arc<Mutex<Database>>` — SQLite connection
 - `Arc<Mutex<SearchIndex>>` — Tantivy index
 - `Arc<AiRouter>` — AI provider router (immutable after init)
 - `Arc<Mutex<SyncManager>>` — background sync tracker
+- `Arc<Mutex<IdleManager>>` — IMAP IDLE push notification manager
 
 ### Database
 
