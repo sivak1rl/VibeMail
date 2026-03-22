@@ -49,9 +49,9 @@ cd src-tauri && cargo check
 ### Backend (`src-tauri/src/`)
 - `ai/`: Implements the AI router and providers (Ollama, OpenAI).
 - `auth/`: Handles OAuth2 PKCE flows and keychain integration for secure token storage.
-- `commands/`: Contains the Tauri IPC command handlers exposed to the frontend.
+- `commands/`: Contains the Tauri IPC command handlers exposed to the frontend (accounts, imap, smtp, ai, search, drafts, general).
 - `db/`: Manages SQLite schema, models, and queries.
-- `mail/`: Core email logic including IMAP sync, SMTP sending, and conversation threading (JWZ algorithm).
+- `mail/`: Core email logic including IMAP sync, SMTP sending, IMAP IDLE push notifications, conversation threading (JWZ algorithm), and draft management.
 - `search/`: Tantivy-based indexing for messages.
 
 ### Frontend (`src/`)
@@ -71,6 +71,7 @@ cd src-tauri && cargo check
 - **Error Handling**: Use `anyhow` or `thiserror` in Rust for robust error propagation.
 - **Database Access**: All database operations should go through the `Database` struct in `src-tauri/src/db/mod.rs`.
 - **OAuth**: Authentication is handled via a local HTTP listener on port `7887` for redirect callbacks.
+- **Drafts**: Local drafts are auto-saved to the `drafts` table (2s debounce), synced to IMAP Drafts folder on compose close, and managed via the `drafts` store and `DraftList` component.
 
 ---
 
