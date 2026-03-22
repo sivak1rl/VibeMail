@@ -9,27 +9,36 @@ An intelligent desktop email client built with Tauri 2 (Rust + React) featuring 
 ## Features
 
 - **Multi-account IMAP/SMTP**: Gmail, Outlook, and generic IMAP servers with OAuth2 PKCE or password auth.
-- **Background Synchronization**: 
+- **Background Synchronization**:
   - Non-blocking sync runs in the background.
   - Real-time progress indicators in the sidebar.
   - "Sliding Window" sync: only fetches mail since your last successful update.
+  - **IMAP IDLE**: Real-time new mail push notifications for instant updates.
 - **Advanced Search**:
   - **Keyword Search**: Powered by SQLite FTS5.
   - **Semantic Search**: Meaning-based search using vector embeddings (Ollama/OpenAI).
   - **History & Filters**: Persistent search history and Gmail-style filters (`from:`, `is:unread`, etc.).
+- **Drafts Management**:
+  - Auto-save drafts to local DB (2s debounce).
+  - Sync drafts to IMAP Drafts folder on compose close.
+  - Browse local and server-synced drafts in dedicated Drafts folder.
+  - Edit IMAP-synced drafts inline in the preview pane.
+  - Automatic cleanup when sending.
 - **AI-Powered Insights**:
   - Intelligent thread summarization.
-  - Smart reply drafting.
+  - Smart reply drafting with tone selector.
   - Action item extraction and triage scoring.
   - **Intelligent Labeling**: Automatic categorization that avoids redundant processing.
+  - Email roundup digest with inline AI actions.
 - **Robust Attachment Handling**:
   - Unified attachment sidebar for entire threads.
   - One-click "Open" in system-default applications.
   - Image previews and thumbnails.
-- **Modern Responsive UI**: 
+- **Modern Responsive UI**:
   - Collapsible sidebar and adaptive layout for different window sizes.
   - Lightbox-style focused email view.
   - Loading skeletons and "Pull to Refresh" support.
+  - Dark theme with intuitive keyboard shortcuts.
 - **Danger Zone**: Wipe local cache and reset database schemas without losing account credentials.
 
 ## Architecture
