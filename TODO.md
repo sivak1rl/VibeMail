@@ -18,8 +18,8 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 ## Short Term — Polish the MVP
 
 ### Sync & Reliability
-- [ ] Retry logic with exponential backoff on transient failures
-- [ ] Detect and handle token revocation gracefully (re-prompt OAuth)
+- [x] Retry logic with exponential backoff on transient failures
+- [x] Detect and handle token revocation gracefully (re-prompt OAuth)
 
 ### AI
 - [ ] Summary caching — store in DB, invalidate when new messages arrive
@@ -83,7 +83,7 @@ Working end-to-end: Gmail OAuth sign-in, IMAP sync with graduated batching (newe
 
 - [ ] Replace file-based token store with OS keychain (fix Linux secret-service detection)
 - [ ] Structured logging — migrate 31 println!/eprintln! statements to `tracing` crate (already imported)
-- [ ] Rate limiting on token refresh (don't refresh on every IMAP connect)
+- [x] Rate limiting on token refresh (don't refresh on every IMAP connect)
 - [ ] Add comprehensive test suite (Rust unit tests, React component tests — currently only 5 Rust tests, zero React tests)
 
 ---

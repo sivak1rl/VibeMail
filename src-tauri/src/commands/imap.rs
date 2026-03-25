@@ -74,7 +74,7 @@ pub async fn fetch_history(
                     .ok_or_else(|| anyhow::anyhow!("Account not found"))?
             };
 
-            let mut session = mail_imap::connect_imap(&account).await?;
+            let mut session = mail_imap::connect_imap_with_retry(&account).await?;
             let mut total_new = 0;
 
             let mailboxes = if let Some(mid) = &mailbox_id_task {
@@ -93,9 +93,10 @@ pub async fn fetch_history(
                     db.get_mailbox_oldest_date(&mailbox.id)?
                 };
 
-                println!(
-                    ">>> HISTORY: Mailbox {} has oldest local date: {:?}",
-                    mailbox.name, oldest_date
+                tracing::debug!(
+                    "HISTORY: Mailbox {} has oldest local date: {:?}",
+                    mailbox.name,
+                    oldest_date
                 );
 
                 let search_query = if let Some(oldest) = oldest_date {
@@ -108,7 +109,7 @@ pub async fn fetch_history(
                     format!("SINCE {}", since_date)
                 };
 
-                println!(">>> HISTORY: Search query: {}", search_query);
+                tracing::debug!("HISTORY: Search query: {}", search_query);
                 let _ = app_clone.emit(
                     "sync-progress",
                     SyncProgress {
@@ -123,7 +124,7 @@ pub async fn fetch_history(
                 let mut uids: Vec<u32> = uids_set.into_iter().collect();
                 uids.sort_unstable_by(|a, b| b.cmp(a)); // Newest of the older mail first
 
-                println!(">>> HISTORY: Found {} candidate UIDs", uids.len());
+                tracing::debug!("HISTORY: Found {} candidate UIDs", uids.len());
 
                 // Limit the number of history items per pull
                 uids.truncate(limit as usize);
@@ -133,7 +134,7 @@ pub async fn fetch_history(
                     let total = uids.len();
                     for (idx, chunk) in uids.chunks(batch_size as usize).enumerate() {
                         let uid_range = format_uid_sequence_set(chunk);
-                        println!(">>> HISTORY: Fetching UID range: {}", uid_range);
+                        tracing::debug!("HISTORY: Fetching UID range: {}", uid_range);
                         let current_count = (idx * batch_size as usize) + chunk.len();
                         let _ = app_clone.emit(
                             "sync-progress",
@@ -153,7 +154,7 @@ pub async fn fetch_history(
                             .try_collect()
                             .await?;
 
-                        println!(">>> HISTORY: Parsed {} fetches from server", fetches.len());
+                        tracing::debug!("HISTORY: Parsed {} fetches from server", fetches.len());
 
                         let gmail_labels = if account.provider == "gmail" {
                             crate::mail::imap::fetch_all_gmail_labels(&mut session, &uid_range)
@@ -168,8 +169,8 @@ pub async fn fetch_history(
                             &mailbox,
                             &gmail_labels,
                         );
-                        println!(
-                            ">>> HISTORY: Parsed {} messages from fetches",
+                        tracing::debug!(
+                            "HISTORY: Parsed {} messages from fetches",
                             batch_results.len()
                         );
                         if !batch_results.is_empty() {
@@ -181,7 +182,7 @@ pub async fn fetch_history(
                             )
                             .await?;
                             total_new += batch_results.len();
-                            println!(">>> HISTORY: Persisted {} messages", batch_results.len());
+                            tracing::debug!("HISTORY: Persisted {} messages", batch_results.len());
                         }
                     }
                 }
@@ -447,11 +448,7 @@ async fn do_sync(
             .ok_or_else(|| anyhow::anyhow!("Account not found"))?
     };
 
-    let mut session =
-        match timeout(Duration::from_secs(10), mail_imap::connect_imap(&account)).await {
-            Ok(s) => s?,
-            Err(_) => return Err(anyhow::anyhow!("Connection timeout")),
-        };
+    let mut session = mail_imap::connect_imap_with_retry(&account).await?;
 
     let mut mailbox = {
         let db = db.lock().await;
@@ -484,7 +481,7 @@ async fn do_sync(
             total: None,
         },
     );
-    println!(">>> SYNC: Starting sync for {}", mailbox.name);
+    tracing::info!("SYNC: Starting sync for {}", mailbox.name);
 
     // If it's a first-time sync (no uid_next), don't use a timeout.
     // Otherwise, use 60s to prevent background hangs.
@@ -493,7 +490,7 @@ async fn do_sync(
     let sync_future = mail_imap::sync_mailbox(&mut session, &account, &mut mailbox, db.clone(), {
         let app = app.clone();
         move |status: &str| {
-            println!(">>> SYNC PROGRESS: {}", status);
+            tracing::debug!("SYNC PROGRESS: {}", status);
             let _ = app.emit(
                 "sync-progress",
                 SyncProgress {
@@ -509,7 +506,7 @@ async fn do_sync(
         match sync_future.await {
             Ok(msgs) => msgs,
             Err(e) => {
-                println!(">>> SYNC ERROR: {}", e);
+                tracing::error!("SYNC ERROR: {}", e);
                 return Err(e);
             }
         }
@@ -518,12 +515,11 @@ async fn do_sync(
             Ok(res) => match res {
                 Ok(msgs) => msgs,
                 Err(e) => {
-                    println!(">>> SYNC ERROR: {}", e);
+                    tracing::error!("SYNC ERROR: {}", e);
                     return Err(e);
                 }
             },
             Err(_) => {
-                println!(">>> SYNC TIMEOUT for {}", mailbox.name);
                 tracing::warn!("Sync timeout for mailbox {}", mailbox.name);
                 return Ok(0);
             }
@@ -531,10 +527,7 @@ async fn do_sync(
     };
 
     let count = messages.len();
-    println!(
-        ">>> SYNC: Downloaded {} messages for {}",
-        count, mailbox.name
-    );
+    tracing::info!("SYNC: Downloaded {} messages for {}", count, mailbox.name);
     if count > 0 {
         let _ = app.emit(
             "sync-progress",
@@ -622,7 +615,7 @@ pub async fn list_mailboxes(
     };
 
     if request.refresh.unwrap_or(false) {
-        let mut session = mail_imap::connect_imap(&account)
+        let mut session = mail_imap::connect_imap_with_retry(&account)
             .await
             .map_err(|e| e.to_string())?;
         let mailboxes = mail_imap::list_mailboxes(&mut session, &request.account_id)
@@ -657,7 +650,7 @@ pub async fn list_mailboxes(
         return Ok(cached.into_iter().map(MailboxSummary::from).collect());
     }
 
-    let mut session = mail_imap::connect_imap(&account)
+    let mut session = mail_imap::connect_imap_with_retry(&account)
         .await
         .map_err(|e| e.to_string())?;
     let mailboxes = mail_imap::list_mailboxes(&mut session, &request.account_id)
@@ -760,7 +753,7 @@ pub async fn set_threads_flagged(
         (account, targets)
     };
 
-    let mut session = mail_imap::connect_imap(&account)
+    let mut session = mail_imap::connect_imap_with_retry(&account)
         .await
         .map_err(|e| e.to_string())?;
     let store_cmd = if request.flagged {
@@ -885,7 +878,7 @@ pub async fn archive_threads(
     };
 
     let archive_mailbox_name = &archive_mailbox.name;
-    let mut session = mail_imap::connect_imap(&account)
+    let mut session = mail_imap::connect_imap_with_retry(&account)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -982,12 +975,8 @@ pub async fn delete_threads(
             .list_mailboxes(&account.id)
             .map_err(|e| e.to_string())?
             .into_iter()
-            .find(|mb| {
-                mb.folder_role.as_deref() == Some("trash")
-            })
-            .ok_or_else(|| {
-                "No Trash mailbox found.".to_string()
-            })?;
+            .find(|mb| mb.folder_role.as_deref() == Some("trash"))
+            .ok_or_else(|| "No Trash mailbox found.".to_string())?;
 
         let mut uids_by_mailbox: HashMap<String, BTreeSet<u32>> = HashMap::new();
         for location in locations {
@@ -1016,7 +1005,7 @@ pub async fn delete_threads(
     };
 
     let trash_name = &trash_mailbox.name;
-    let mut session = mail_imap::connect_imap(&account)
+    let mut session = mail_imap::connect_imap_with_retry(&account)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1119,7 +1108,7 @@ pub async fn set_threads_read(
         (account, targets)
     };
 
-    let mut session = mail_imap::connect_imap(&account)
+    let mut session = mail_imap::connect_imap_with_retry(&account)
         .await
         .map_err(|e| e.to_string())?;
     let store_cmd = if request.read {
@@ -1151,7 +1140,8 @@ pub async fn set_threads_read(
     let _ = session.logout().await;
 
     let db = db.lock().await;
-    let result = db.set_threads_read_state(&thread_ids, request.read)
+    let result = db
+        .set_threads_read_state(&thread_ids, request.read)
         .map_err(|e: anyhow::Error| e.to_string())?;
     db.refresh_mailbox_counts(&account.id)
         .map_err(|e: anyhow::Error| e.to_string())?;
@@ -1278,7 +1268,6 @@ pub async fn start_idle(
     account_id: String,
     app: AppHandle,
     db: State<'_, Arc<Mutex<Database>>>,
-    search: State<'_, Arc<Mutex<SearchIndex>>>,
     idle_mgr: State<'_, Arc<Mutex<IdleManager>>>,
 ) -> Result<(), String> {
     let account = {
@@ -1291,7 +1280,7 @@ pub async fn start_idle(
     };
 
     let mut idle = idle_mgr.lock().await;
-    idle.start(account, db.inner().clone(), search.inner().clone(), app);
+    idle.start(account, db.inner().clone(), app);
     Ok(())
 }
 
@@ -1351,7 +1340,7 @@ pub async fn fetch_entire_mailbox(
                     .ok_or_else(|| anyhow::anyhow!("Account not found"))?
             };
 
-            let mut session = mail_imap::connect_imap(&account).await?;
+            let mut session = mail_imap::connect_imap_with_retry(&account).await?;
             let mut total_new = 0;
 
             let mailbox = {
@@ -1400,8 +1389,7 @@ pub async fn fetch_entire_mailbox(
                         .await?;
 
                     let gmail_labels = if account.provider == "gmail" {
-                        crate::mail::imap::fetch_all_gmail_labels(&mut session, &uid_range)
-                            .await?
+                        crate::mail::imap::fetch_all_gmail_labels(&mut session, &uid_range).await?
                     } else {
                         HashMap::new()
                     };
@@ -1450,10 +1438,4 @@ pub async fn fetch_entire_mailbox(
         new_messages: 0,
         error: None,
     })
-}
-
-#[tauri::command]
-pub async fn move_message(message_id: String, target_mailbox: String) -> Result<(), String> {
-    tracing::info!("move_message: {} -> {}", message_id, target_mailbox);
-    Ok(())
 }

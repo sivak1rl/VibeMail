@@ -2,7 +2,6 @@
 /// an IMAP connection in IDLE mode and emit events when new mail arrives.
 use crate::db::{models::Account, Database};
 use crate::mail::imap as mail_imap;
-use crate::search::SearchIndex;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -39,13 +38,7 @@ impl IdleManager {
     }
 
     /// Start an IDLE listener for the given account. If one is already running, this is a no-op.
-    pub fn start(
-        &mut self,
-        account: Account,
-        db: Arc<Mutex<Database>>,
-        search: Arc<Mutex<SearchIndex>>,
-        app: AppHandle,
-    ) {
+    pub fn start(&mut self, account: Account, db: Arc<Mutex<Database>>, app: AppHandle) {
         if self.handles.contains_key(&account.id) {
             debug!("IDLE already running for {}", account.id);
             return;
@@ -54,12 +47,10 @@ impl IdleManager {
         let (pause_tx, pause_rx) = watch::channel(true); // start active
         let account_id = account.id.clone();
 
-        let task = tokio::spawn(idle_loop(account, pause_rx, db, search, app));
+        let task = tokio::spawn(idle_loop(account, pause_rx, db, app));
 
-        self.handles.insert(
-            account_id,
-            IdleHandle { pause_tx, task },
-        );
+        self.handles
+            .insert(account_id, IdleHandle { pause_tx, task });
     }
 
     /// Temporarily pause IDLE for an account (e.g. during manual sync).
@@ -108,7 +99,6 @@ async fn idle_loop(
     account: Account,
     mut pause_rx: watch::Receiver<bool>,
     db: Arc<Mutex<Database>>,
-    search: Arc<Mutex<SearchIndex>>,
     app: AppHandle,
 ) {
     let mut backoff = Duration::from_secs(5);
@@ -128,20 +118,26 @@ async fn idle_loop(
             }
             // Wait for a change — if the channel closes, shut down.
             if pause_rx.changed().await.is_err() {
-                info!("IDLE channel closed for {} during pause, shutting down", account.id);
+                info!(
+                    "IDLE channel closed for {} during pause, shutting down",
+                    account.id
+                );
                 return;
             }
         }
 
         info!("IDLE connecting for {}", account.id);
 
-        match run_idle_session(&account, &mut pause_rx, &db, &search, &app).await {
+        match run_idle_session(&account, &mut pause_rx, &db, &app).await {
             Ok(()) => {
                 // Clean exit (paused or shutdown) — reset backoff
                 backoff = Duration::from_secs(5);
             }
             Err(e) => {
-                warn!("IDLE error for {}: {}. Retrying in {:?}", account.id, e, backoff);
+                warn!(
+                    "IDLE error for {}: {}. Retrying in {:?}",
+                    account.id, e, backoff
+                );
                 // Wait the backoff period, but abort early if the channel closes.
                 tokio::select! {
                     _ = tokio::time::sleep(backoff) => {}
@@ -160,10 +156,9 @@ async fn run_idle_session(
     account: &Account,
     pause_rx: &mut watch::Receiver<bool>,
     db: &Arc<Mutex<Database>>,
-    _search: &Arc<Mutex<SearchIndex>>,
     app: &AppHandle,
 ) -> Result<()> {
-    let mut session = mail_imap::connect_imap(account).await?;
+    let mut session = mail_imap::connect_imap_with_retry(account).await?;
 
     // Pick the right mailbox — Gmail uses [Gmail]/All Mail, others use INBOX.
     let mailbox_name = if account.provider == "gmail" {
@@ -239,14 +234,15 @@ async fn run_idle_session(
                 return Err(anyhow::anyhow!("IDLE wait error: {}", e));
             }
             Some(Ok(reason)) => {
-                let got_data = !matches!(
-                    reason,
-                    async_imap::extensions::idle::IdleResponse::Timeout
-                );
+                let got_data =
+                    !matches!(reason, async_imap::extensions::idle::IdleResponse::Timeout);
                 session = idle_handle.done().await?;
 
                 if got_data {
-                    info!("IDLE detected new mail for {} in {}", account.id, mailbox_name);
+                    info!(
+                        "IDLE detected new mail for {} in {}",
+                        account.id, mailbox_name
+                    );
                     let _ = app.emit(
                         "idle-new-mail",
                         IdleNewMail {

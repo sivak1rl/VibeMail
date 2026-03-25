@@ -58,7 +58,10 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
             |row| row.get(0),
         )?;
         if has_old_mailbox_id > 0 {
-            conn.execute("ALTER TABLE messages RENAME COLUMN mailbox_id TO source_mailbox_id", [])?;
+            conn.execute(
+                "ALTER TABLE messages RENAME COLUMN mailbox_id TO source_mailbox_id",
+                [],
+            )?;
         }
     }
 
@@ -149,10 +152,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         |row| row.get(0),
     )?;
     if has_folder_role == 0 {
-        conn.execute(
-            "ALTER TABLE mailboxes ADD COLUMN folder_role TEXT",
-            [],
-        )?;
+        conn.execute("ALTER TABLE mailboxes ADD COLUMN folder_role TEXT", [])?;
         // Backfill from folder names
         conn.execute_batch(
             "UPDATE mailboxes SET folder_role = 'inbox' WHERE UPPER(name) = 'INBOX';

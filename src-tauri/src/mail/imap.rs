@@ -1,6 +1,6 @@
-use crate::auth::{keychain, oauth};
+use crate::auth::{keychain, oauth, token_cache};
 use crate::db::{models::*, Database};
-use crate::mail::{parser, threading};
+use crate::mail::{parser, retry, threading};
 use anyhow::{anyhow, Result};
 use async_imap::imap_proto::types::{AttributeValue, Response, Status};
 use async_imap::{types::Flag, Client};
@@ -80,7 +80,7 @@ pub async fn connect_imap(account: &Account) -> Result<ImapSession> {
 
     let session = match account.provider.as_str() {
         "gmail" | "outlook" => {
-            let access_token = get_or_refresh_token(account).await?;
+            let access_token = token_cache::get_access_token(account).await?;
             let encoded = oauth::build_xoauth2(&account.email, &access_token);
             tokio::time::timeout(
                 Duration::from_secs(15),
@@ -110,33 +110,27 @@ pub async fn connect_imap(account: &Account) -> Result<ImapSession> {
     Ok(session)
 }
 
-async fn get_or_refresh_token(account: &Account) -> Result<String> {
-    // Always refresh if we have a refresh token — access tokens expire after ~1 hour
-    let refresh = keychain::get_token(&account.id, "refresh_token")?;
-    if refresh.is_none() {
-        // No refresh token — try the stored access token as-is
-        if let Some(token) = keychain::get_token(&account.id, "access_token")? {
-            return Ok(token);
+/// Connect to IMAP with automatic retry on transient failures.
+/// On auth failure, invalidates the token cache and fails immediately.
+pub async fn connect_imap_with_retry(account: &Account) -> Result<ImapSession> {
+    let account = account.clone();
+    retry::with_retry("IMAP connect", || {
+        let account = account.clone();
+        async move {
+            match connect_imap(&account).await {
+                Ok(session) => Ok(session),
+                Err(e) => {
+                    let msg = e.to_string().to_lowercase();
+                    // If auth failed, the cached token may be stale — invalidate it
+                    if msg.contains("auth failed") || msg.contains("auth timed out") {
+                        token_cache::invalidate(&account.id);
+                    }
+                    Err(e)
+                }
+            }
         }
-        return Err(anyhow!("No tokens for {}; re-auth required", account.email));
-    }
-    let refresh = refresh.unwrap();
-    let client_id = keychain::get_token(&account.id, "client_id")?
-        .ok_or_else(|| anyhow!("No client_id for account {}", account.id))?;
-
-    let client_secret = keychain::get_token(&account.id, "client_secret")?;
-    let config = match account.provider.as_str() {
-        "gmail" => oauth::OAuthConfig::gmail(&client_id, client_secret.as_deref()),
-        "outlook" => oauth::OAuthConfig::outlook(&client_id, client_secret.as_deref()),
-        _ => return Err(anyhow!("Unknown OAuth provider")),
-    };
-
-    let tokens = oauth::refresh_token(&config, &refresh).await?;
-    keychain::store_token(&account.id, "access_token", &tokens.access_token)?;
-    if let Some(rt) = &tokens.refresh_token {
-        keychain::store_token(&account.id, "refresh_token", rt)?;
-    }
-    Ok(tokens.access_token)
+    })
+    .await
 }
 
 fn flag_to_string(f: &Flag<'_>) -> String {
@@ -399,7 +393,7 @@ pub fn parse_fetches(
                 msg.is_read = msg.flags.iter().any(|f| f == "\\Seen");
                 msg.is_flagged = msg.flags.iter().any(|f| f == "\\Flagged");
                 if let Some(raw_labels) = gmail_labels.get(&uid) {
-                    println!(">>> GMAIL LABELS uid={}: {:?}", uid, raw_labels);
+                    debug!("GMAIL LABELS uid={}: {:?}", uid, raw_labels);
                     // VibeMail/* labels → append to flags (existing categorisation system)
                     for label in raw_labels {
                         if let Some(vibe) = extract_vibemail_label(label) {
@@ -411,15 +405,21 @@ pub fn parse_fetches(
                         .iter()
                         .filter_map(|label| {
                             let resolved = gmail_label_to_mailbox_name(label);
-                            if resolved.is_none() && (label.starts_with('\\') || label.starts_with("\\\\")) {
-                                println!(">>> GMAIL SYSTEM LABEL UNRESOLVED: {:?} (bytes: {:?})", label, label.as_bytes());
+                            if resolved.is_none()
+                                && (label.starts_with('\\') || label.starts_with("\\\\"))
+                            {
+                                debug!(
+                                    "GMAIL SYSTEM LABEL UNRESOLVED: {:?} (bytes: {:?})",
+                                    label,
+                                    label.as_bytes()
+                                );
                             }
                             resolved.map(|mb_name| format!("{}:{}", account.id, mb_name))
                         })
                         .collect();
-                    println!(">>> INBOX_MAILBOXES uid={}: {:?}", uid, msg.mailbox_ids);
+                    debug!("INBOX_MAILBOXES uid={}: {:?}", uid, msg.mailbox_ids);
                 } else {
-                    println!(">>> GMAIL LABELS uid={}: NO LABELS RETURNED", uid);
+                    debug!("GMAIL LABELS uid={}: no labels returned", uid);
                 }
                 // Always include the mailbox we're syncing from.
                 if !msg.mailbox_ids.contains(&mailbox.id) {
@@ -542,10 +542,6 @@ pub async fn persist_batch(
     match result {
         Ok((thread_count, msg_count)) => {
             db_lock.conn.execute_batch("COMMIT")?;
-            println!(
-                ">>> DB: Successfully persisted {} threads and {} messages",
-                thread_count, msg_count
-            );
             info!(
                 "Persisted {} threads and {} messages",
                 thread_count, msg_count
@@ -554,7 +550,7 @@ pub async fn persist_batch(
         }
         Err(e) => {
             let _ = db_lock.conn.execute_batch("ROLLBACK");
-            println!(">>> DB ERROR: persist_batch failed: {}", e);
+            warn!("persist_batch failed: {}", e);
             Err(e)
         }
     }
@@ -632,11 +628,7 @@ pub async fn fetch_all_gmail_labels(
                     match attr {
                         AttributeValue::Uid(value) => uid = Some(*value),
                         AttributeValue::GmailLabels(values) => {
-                            labels.extend(
-                                values
-                                    .iter()
-                                    .map(|value| value.as_ref().to_string()),
-                            );
+                            labels.extend(values.iter().map(|value| value.as_ref().to_string()));
                         }
                         _ => {}
                     }

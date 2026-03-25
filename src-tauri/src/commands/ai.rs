@@ -257,7 +257,9 @@ Rules:
         .filter_map(|item| {
             let label = item["label"].as_str()?.to_string();
             let body = item["body"].as_str()?.to_string();
-            if body.is_empty() { return None; }
+            if body.is_empty() {
+                return None;
+            }
             Some(ReplySuggestion { label, body })
         })
         .collect::<Vec<_>>();
@@ -708,7 +710,9 @@ async fn sync_gmail_category_labels_for_account(
                     let mailbox = db
                         .get_mailbox_by_id(&account.id, &location.source_mailbox_id)
                         .map_err(|e| e.to_string())?
-                        .ok_or_else(|| format!("Mailbox not found: {}", location.source_mailbox_id))?;
+                        .ok_or_else(|| {
+                            format!("Mailbox not found: {}", location.source_mailbox_id)
+                        })?;
                     mailbox_names.insert(location.source_mailbox_id.clone(), mailbox.name);
                 }
             }
@@ -720,7 +724,7 @@ async fn sync_gmail_category_labels_for_account(
         return Ok(());
     }
 
-    let mut session = mail_imap::connect_imap(account)
+    let mut session = mail_imap::connect_imap_with_retry(account)
         .await
         .map_err(|e| e.to_string())?;
     let remove_arg = format_gmail_label_list(allowed_labels);
@@ -935,10 +939,7 @@ pub async fn generate_roundup(
         };
         let score = thread.triage_score.unwrap_or(0.5);
 
-        let mut line = format!(
-            "- \"{}\" from {} (score: {:.1})",
-            subject, last_from, score
-        );
+        let mut line = format!("- \"{}\" from {} (score: {:.1})", subject, last_from, score);
         if !thread.labels.is_empty() {
             line.push_str(&format!(" [{}]", thread.labels.join(", ")));
         }

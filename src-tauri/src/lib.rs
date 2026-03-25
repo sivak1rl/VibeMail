@@ -86,7 +86,6 @@ pub fn run() {
             commands::imap::set_threads_flagged,
             commands::imap::archive_threads,
             commands::imap::delete_threads,
-            commands::imap::move_message,
             commands::imap::list_attachments,
             commands::imap::list_thread_attachments,
             commands::imap::open_attachment,
@@ -126,8 +125,10 @@ pub fn run() {
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 // Stop all IDLE tasks on app exit.
-                let idle_mgr: Arc<Mutex<mail::idle::IdleManager>> =
-                    app.state::<Arc<Mutex<mail::idle::IdleManager>>>().inner().clone();
+                let idle_mgr: Arc<Mutex<mail::idle::IdleManager>> = app
+                    .state::<Arc<Mutex<mail::idle::IdleManager>>>()
+                    .inner()
+                    .clone();
                 tauri::async_runtime::block_on(async {
                     let mut idle = idle_mgr.lock().await;
                     idle.stop_all().await;

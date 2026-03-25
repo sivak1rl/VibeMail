@@ -108,29 +108,29 @@ pub async fn reindex_all_semantic(
 
     tokio::spawn(async move {
         use tauri::Emitter;
-        println!(">>> BACKEND: Starting reindex for {}", account_id_task);
+        tracing::info!("Starting reindex for {}", account_id_task);
 
         let result = async {
             let model = ai_clone.model_for(&TaskKind::Embed).await.map_err(|e| {
                 let err = format!("Failed to get embedding model: {}", e);
-                println!(">>> BACKEND ERROR: {}", err);
+                tracing::error!("{}", err);
                 err
             })?;
 
-            println!(">>> BACKEND: Using model {}", model);
+            tracing::info!("Using embedding model {}", model);
 
             let threads = {
                 let db = db_clone.lock().await;
                 db.list_threads(&account_id_task, None, 50000, 0)
                     .map_err(|e| {
                         let err = format!("Failed to list threads: {}", e);
-                        println!(">>> BACKEND ERROR: {}", err);
+                        tracing::error!("{}", err);
                         err
                     })?
             };
 
             let total = threads.len();
-            println!(">>> BACKEND: Found {} threads", total);
+            tracing::info!("Reindex: found {} threads to embed", total);
 
             if total == 0 {
                 return Ok(0);
@@ -175,18 +175,18 @@ pub async fn reindex_all_semantic(
                     Ok(embedding) => {
                         let db = db_clone.lock().await;
                         if let Err(e) = db.upsert_thread_embedding(&thread.id, &model, &embedding) {
-                            println!(">>> BACKEND ERROR: upsert failed: {}", e);
+                            tracing::error!("Reindex: upsert failed: {}", e);
                         } else {
                             success_count += 1;
                         }
                     }
                     Err(e) => {
-                        println!(">>> BACKEND WARN: embed failed: {}", e);
+                        tracing::warn!("Reindex: embed failed: {}", e);
                     }
                 }
             }
 
-            println!(">>> BACKEND: Finished. Indexed {} threads", success_count);
+            tracing::info!("Reindex finished. Indexed {} threads", success_count);
             Ok::<usize, String>(success_count)
         }
         .await;
