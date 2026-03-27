@@ -91,10 +91,7 @@ pub async fn get_draft(
 }
 
 #[tauri::command]
-pub async fn delete_draft(
-    id: String,
-    db: State<'_, Arc<Mutex<Database>>>,
-) -> Result<(), String> {
+pub async fn delete_draft(id: String, db: State<'_, Arc<Mutex<Database>>>) -> Result<(), String> {
     let db = db.lock().await;
     db.delete_draft(&id).map_err(|e| e.to_string())
 }
@@ -151,10 +148,10 @@ pub async fn sync_draft_to_imap(
     };
 
     // Build RFC 2822 message from the draft
-    let rfc2822 = build_draft_rfc2822(&account.email, &account.name, &draft)
-        .map_err(|e| e.to_string())?;
+    let rfc2822 =
+        build_draft_rfc2822(&account.email, &account.name, &draft).map_err(|e| e.to_string())?;
 
-    let mut session = mail_imap::connect_imap(&account)
+    let mut session = mail_imap::connect_imap_with_retry(&account)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -204,7 +201,7 @@ pub async fn delete_draft_from_imap(
     // Use the draft ID as a synthetic Message-ID to find the server copy
     let search_msgid = format!("vibemail-draft-{}", draft.id);
 
-    let mut session = mail_imap::connect_imap(&account)
+    let mut session = mail_imap::connect_imap_with_retry(&account)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -270,14 +267,24 @@ fn build_draft_rfc2822(
         )));
 
     // Parse To addresses (comma-separated)
-    for addr in draft.to_addrs.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+    for addr in draft
+        .to_addrs
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if let Ok(mb) = addr.parse::<Mailbox>() {
             builder = builder.to(mb);
         }
     }
 
     // Parse CC addresses
-    for addr in draft.cc_addrs.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+    for addr in draft
+        .cc_addrs
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         if let Ok(mb) = addr.parse::<Mailbox>() {
             builder = builder.cc(mb);
         }

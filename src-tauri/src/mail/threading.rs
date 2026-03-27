@@ -2,6 +2,7 @@
 /// Groups messages into threads based on Message-ID, References, and In-Reply-To headers.
 use crate::db::models::{Message, Thread};
 use std::collections::{BTreeSet, HashMap};
+use tracing::debug;
 use uuid::Uuid;
 
 struct ThreadNode {
@@ -16,10 +17,7 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
     if messages.is_empty() {
         return vec![];
     }
-    println!(
-        ">>> THREADING: Starting build for {} messages",
-        messages.len()
-    );
+    debug!("THREADING: Starting build for {} messages", messages.len());
     // Step 1: Build id_table mapping message-id -> node
     let mut id_table: HashMap<String, ThreadNode> = HashMap::new();
     let mut root_ids: Vec<String> = Vec::new();
@@ -71,9 +69,11 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
                 // Only link if child has no parent (avoid cycles)
                 let child_has_parent = id_table[child_id].parent.is_some();
                 if !child_has_parent {
-                    let child = id_table.get_mut(child_id).unwrap();
+                    let child = id_table
+                        .get_mut(child_id)
+                        .expect("child_id was just inserted");
                     child.parent = Some(ref_id.clone());
-                    let parent = id_table.get_mut(ref_id).unwrap();
+                    let parent = id_table.get_mut(ref_id).expect("ref_id was just inserted");
                     if !parent.children.contains(child_id) {
                         parent.children.push(child_id.clone());
                     }
@@ -85,9 +85,11 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
         if let Some(parent_ref) = refs.last() {
             let msg_has_parent = id_table[&mid].parent.is_some();
             if !msg_has_parent {
-                let node = id_table.get_mut(&mid).unwrap();
+                let node = id_table.get_mut(&mid).expect("mid was just inserted");
                 node.parent = Some(parent_ref.clone());
-                let parent = id_table.get_mut(parent_ref).unwrap();
+                let parent = id_table
+                    .get_mut(parent_ref)
+                    .expect("parent_ref was just inserted");
                 if !parent.children.contains(&mid) {
                     parent.children.push(mid.clone());
                 }
@@ -127,10 +129,7 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
             .max_by_key(|m| m.date)
             .and_then(|m| m.from.first())
             .map(|a| a.email.clone());
-        let unread_count = thread_messages
-            .iter()
-            .filter(|m| !m.is_read)
-            .count() as u32;
+        let unread_count = thread_messages.iter().filter(|m| !m.is_read).count() as u32;
         let is_flagged = thread_messages.iter().any(|m| m.is_flagged);
         let has_attachments = thread_messages.iter().any(|m| m.has_attachments);
 
@@ -173,10 +172,7 @@ pub fn build_threads(messages: Vec<Message>, account_id: &str) -> Vec<Thread> {
 
     // Sort by most recent
     threads.sort_by(|a, b| b.last_date.cmp(&a.last_date));
-    println!(
-        ">>> THREADING: Successfully built {} threads",
-        threads.len()
-    );
+    debug!("THREADING: Successfully built {} threads", threads.len());
     threads
 }
 

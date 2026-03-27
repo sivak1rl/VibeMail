@@ -1,6 +1,6 @@
 use crate::db::{models::*, Database};
 use anyhow::Result;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use serde_json;
 use std::collections::HashMap;
 
@@ -78,7 +78,7 @@ impl Database {
             uid_next: row.get::<_, Option<i64>>(6)?.map(|v| v as u32),
             last_synced_at: row
                 .get::<_, Option<i64>>(7)?
-                .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+                .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
             thread_count: row.get::<_, i64>(8)? as u32,
             unread_count: row.get::<_, i64>(9)? as u32,
             folder_role: row.get(10)?,
@@ -233,7 +233,7 @@ impl Database {
             .conn
             .prepare("SELECT MIN(date) FROM messages WHERE source_mailbox_id=?1")?;
         let date: Option<i64> = stmt.query_row([mailbox_id], |row| row.get(0))?;
-        Ok(date.map(|ts| Utc.timestamp_opt(ts, 0).unwrap()))
+        Ok(date.map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()))
     }
 
     pub fn upsert_message(&self, msg: &Message) -> Result<()> {
@@ -346,7 +346,7 @@ impl Database {
                 has_attachments: row.get::<_, i64>(7)? != 0,
                 last_date: row
                     .get::<_, Option<i64>>(8)?
-                    .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+                    .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
                 last_from: row.get(9)?,
                 triage_score: row.get(10)?,
                 labels: serde_json::from_str(&row.get::<_, String>(11).unwrap_or_default())
@@ -433,13 +433,11 @@ impl Database {
                         has_attachments: row.get::<_, i64>(7)? != 0,
                         last_date: row
                             .get::<_, Option<i64>>(8)?
-                            .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+                            .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
                         last_from: row.get(9)?,
                         triage_score: row.get(10)?,
-                        labels: serde_json::from_str(
-                            &row.get::<_, String>(11).unwrap_or_default(),
-                        )
-                        .unwrap_or_default(),
+                        labels: serde_json::from_str(&row.get::<_, String>(11).unwrap_or_default())
+                            .unwrap_or_default(),
                         messages: None,
                     })
                 },
@@ -521,7 +519,7 @@ impl Database {
                     cc: parse_addr(row.get::<_, String>(9).unwrap_or_default()),
                     date: row
                         .get::<_, Option<i64>>(10)?
-                        .map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+                        .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
                     body_text: row.get(11)?,
                     body_html: row.get(12)?,
                     references_ids: serde_json::from_str(
@@ -851,8 +849,8 @@ impl Database {
         params.push(offset.into());
 
         let mut stmt = self.conn.prepare(&sql)?;
-        println!(">>> FTS SQL: {}", sql);
-        println!(">>> FTS Params: {:?}", params);
+        tracing::debug!("FTS SQL: {}", sql);
+        tracing::debug!("FTS Params: {:?}", params);
         let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
             row.get::<_, Option<String>>(0)
         })?;
@@ -909,7 +907,7 @@ impl Database {
                 has_attachments: row.get::<_, i64>(7)? != 0,
                 last_date: row
                     .get::<_, Option<i64>>(8)?
-                    .map(|ts| chrono::Utc.timestamp_opt(ts, 0).unwrap()),
+                    .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default()),
                 last_from: row.get(9)?,
                 triage_score: row.get(10)?,
                 labels: serde_json::from_str(&row.get::<_, String>(11).unwrap_or_default())
@@ -1178,10 +1176,17 @@ impl Database {
                  in_reply_to=excluded.in_reply_to, thread_id=excluded.thread_id,
                  updated_at=unixepoch()"#,
             rusqlite::params![
-                draft.id, draft.account_id, draft.mode,
-                draft.to_addrs, draft.cc_addrs, draft.bcc_addrs,
-                draft.subject, draft.body_text, draft.body_html,
-                draft.in_reply_to, draft.thread_id,
+                draft.id,
+                draft.account_id,
+                draft.mode,
+                draft.to_addrs,
+                draft.cc_addrs,
+                draft.bcc_addrs,
+                draft.subject,
+                draft.body_text,
+                draft.body_html,
+                draft.in_reply_to,
+                draft.thread_id,
             ],
         )?;
         Ok(())
@@ -1352,7 +1357,11 @@ mod tests {
                 last_synced_at: None,
                 thread_count: 0,
                 unread_count: 0,
-                folder_role: if name == "INBOX" { Some("inbox".to_string()) } else { None },
+                folder_role: if name == "INBOX" {
+                    Some("inbox".to_string())
+                } else {
+                    None
+                },
             })
             .expect("mailbox");
         }

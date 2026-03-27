@@ -1,5 +1,6 @@
-use crate::auth::{keychain, oauth};
+use crate::auth::{keychain, token_cache};
 use crate::db::models::{Account, ComposeMessage};
+use crate::mail::retry;
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use lettre::{
@@ -10,6 +11,25 @@ use lettre::{
 use tracing::info;
 
 pub async fn send_message(account: &Account, compose: &ComposeMessage) -> Result<()> {
+    // Build the email message once (this is pure validation, not network I/O)
+    let email = build_message(account, compose)?;
+
+    // Send with retry — transient SMTP failures get retried automatically
+    let account = account.clone();
+    retry::with_retry("SMTP send", || {
+        let account = account.clone();
+        let email = email.clone();
+        async move {
+            let mailer = build_transport(&account).await?;
+            mailer.send(email).await?;
+            info!("Message sent via SMTP for {}", account.email);
+            Ok(())
+        }
+    })
+    .await
+}
+
+fn build_message(account: &Account, compose: &ComposeMessage) -> Result<Message> {
     let from_mailbox: Mailbox = format!("{} <{}>", account.name, account.email)
         .parse()
         .map_err(|e| anyhow!("Invalid from address: {}", e))?;
@@ -63,8 +83,8 @@ pub async fn send_message(account: &Account, compose: &ComposeMessage) -> Result
     };
 
     let attachments = compose.attachments.as_deref().unwrap_or(&[]);
-    let email = if attachments.is_empty() {
-        builder.multipart(body_part)?
+    if attachments.is_empty() {
+        Ok(builder.multipart(body_part)?)
     } else {
         let mut mixed = MultiPart::mixed().multipart(body_part);
         for attach in attachments {
@@ -78,20 +98,15 @@ pub async fn send_message(account: &Account, compose: &ComposeMessage) -> Result
             let part = Attachment::new(attach.filename.clone()).body(data, ct);
             mixed = mixed.singlepart(part);
         }
-        builder.multipart(mixed)?
-    };
-
-    let mailer = build_transport(account).await?;
-    mailer.send(email).await?;
-    info!("Message sent via SMTP for {}", account.email);
-    Ok(())
+        Ok(builder.multipart(mixed)?)
+    }
 }
 
 async fn build_transport(account: &Account) -> Result<AsyncSmtpTransport<Tokio1Executor>> {
     match account.provider.as_str() {
         "gmail" | "outlook" => {
             // OAuth2 accounts must use XOAUTH2 SASL — a raw access token is not a password.
-            let access_token = get_or_refresh_token(account).await?;
+            let access_token = token_cache::get_access_token(account).await?;
             let creds = Credentials::new(account.email.clone(), access_token);
             let transport =
                 AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&account.smtp_host)?
@@ -115,28 +130,4 @@ async fn build_transport(account: &Account) -> Result<AsyncSmtpTransport<Tokio1E
             Ok(transport)
         }
     }
-}
-
-/// Mirrors imap.rs: refreshes via refresh_token if available, otherwise returns stored access_token.
-async fn get_or_refresh_token(account: &Account) -> Result<String> {
-    let refresh = keychain::get_token(&account.id, "refresh_token")?;
-    if refresh.is_none() {
-        return keychain::get_token(&account.id, "access_token")?
-            .ok_or_else(|| anyhow!("No tokens for {}; re-auth required", account.email));
-    }
-    let refresh = refresh.unwrap();
-    let client_id = keychain::get_token(&account.id, "client_id")?
-        .ok_or_else(|| anyhow!("No client_id for account {}", account.id))?;
-    let client_secret = keychain::get_token(&account.id, "client_secret")?;
-    let config = match account.provider.as_str() {
-        "gmail" => oauth::OAuthConfig::gmail(&client_id, client_secret.as_deref()),
-        "outlook" => oauth::OAuthConfig::outlook(&client_id, client_secret.as_deref()),
-        _ => return Err(anyhow!("Unknown OAuth provider")),
-    };
-    let tokens = oauth::refresh_token(&config, &refresh).await?;
-    keychain::store_token(&account.id, "access_token", &tokens.access_token)?;
-    if let Some(rt) = &tokens.refresh_token {
-        keychain::store_token(&account.id, "refresh_token", rt)?;
-    }
-    Ok(tokens.access_token)
 }
